@@ -254,6 +254,8 @@ npm run test:e2e:ui       # modo interactivo
 
 Variable opcional: **`E2E_ADMIN_PASSWORD`** — si no está definida, los tests usan `admin12345` (valor por defecto de Docker Compose).
 
+**401 en `/api/appointments` en el panel:** suele ser un JWT viejo tras cambiar `JWT_SECRET` o reconstruir el contenedor de la API. Cerrá sesión en el panel o borrá `sessionStorage` y volvé a loguearte.
+
 ### Estado actual del desarrollo
 
 - **Backend**

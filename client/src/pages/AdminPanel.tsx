@@ -36,8 +36,38 @@ function statusClass(s: string) {
   return 'bg-slate-800 text-slate-400 border-slate-600'
 }
 
+/** Solo monta efectos de turnos cuando ya hay JWT (evita ruido y estados raros en la pantalla de login). */
 export default function AdminPanel() {
   const [token, setToken] = useState<string | null>(() => getAdminToken())
+
+  const onSessionInvalid = useCallback(() => {
+    clearAdminToken()
+    setToken(null)
+  }, [])
+
+  const onLoggedIn = useCallback(() => {
+    setToken(getAdminToken())
+  }, [])
+
+  if (!token) {
+    return <AdminLogin onLoggedIn={onLoggedIn} />
+  }
+
+  return (
+    <AdminAuthenticatedPanel
+      token={token}
+      onSessionInvalid={onSessionInvalid}
+    />
+  )
+}
+
+function AdminAuthenticatedPanel({
+  token,
+  onSessionInvalid,
+}: {
+  token: string
+  onSessionInvalid: () => void
+}) {
   const [barbers, setBarbers] = useState<Barber[]>([])
   const [filterBarberId, setFilterBarberId] = useState<string | ''>('')
   const [date, setDate] = useState(() => toInputDate(new Date()))
@@ -46,17 +76,7 @@ export default function AdminPanel() {
   const [error, setError] = useState<string | null>(null)
   const [updatingId, setUpdatingId] = useState<string | null>(null)
 
-  const authHeaders = useCallback(
-    () => ({
-      Authorization: `Bearer ${token}`,
-    }),
-    [token],
-  )
-
-  const forceRelogin = useCallback(() => {
-    clearAdminToken()
-    setToken(null)
-  }, [])
+  const authHeader = { Authorization: `Bearer ${token}` }
 
   useEffect(() => {
     void (async () => {
@@ -71,42 +91,53 @@ export default function AdminPanel() {
     })()
   }, [])
 
-  const loadAppointments = useCallback(async () => {
-    if (!token) return
-    try {
-      setError(null)
-      setLoading(true)
-      const { from, to } = dayRangeIso(date)
-      const params = new URLSearchParams({ from, to })
-      if (filterBarberId) params.set('barberId', filterBarberId)
-      const res = await fetch(`${API_BASE}/appointments?${params}`, {
-        headers: authHeaders(),
-      })
-      if (res.status === 401) {
-        forceRelogin()
-        return
+  const loadAppointments = useCallback(
+    async (signal?: AbortSignal) => {
+      try {
+        setError(null)
+        setLoading(true)
+        const { from, to } = dayRangeIso(date)
+        const params = new URLSearchParams({ from, to })
+        if (filterBarberId) params.set('barberId', filterBarberId)
+        let res: Response
+        try {
+          res = await fetch(`${API_BASE}/appointments?${params}`, {
+            headers: authHeader,
+            signal,
+          })
+        } catch (e) {
+          if (e instanceof DOMException && e.name === 'AbortError') return
+          throw e
+        }
+        if (res.status === 401) {
+          onSessionInvalid()
+          return
+        }
+        if (!res.ok) {
+          const data = (await res.json().catch(() => null)) as {
+            error?: string
+          } | null
+          throw new Error(data?.error ?? 'No se pudieron cargar los turnos')
+        }
+        setRows((await res.json()) as AppointmentRow[])
+      } catch (e) {
+        if (e instanceof DOMException && e.name === 'AbortError') return
+        setError(e instanceof Error ? e.message : 'Error cargando turnos')
+        setRows([])
+      } finally {
+        setLoading(false)
       }
-      if (!res.ok) {
-        const data = (await res.json().catch(() => null)) as {
-          error?: string
-        } | null
-        throw new Error(data?.error ?? 'No se pudieron cargar los turnos')
-      }
-      setRows((await res.json()) as AppointmentRow[])
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Error cargando turnos')
-      setRows([])
-    } finally {
-      setLoading(false)
-    }
-  }, [authHeaders, date, filterBarberId, forceRelogin, token])
+    },
+    [token, date, filterBarberId, onSessionInvalid],
+  )
 
   useEffect(() => {
-    void loadAppointments()
+    const ac = new AbortController()
+    void loadAppointments(ac.signal)
+    return () => ac.abort()
   }, [loadAppointments])
 
   const patchStatus = async (id: string, status: AppointmentStatus) => {
-    if (!token) return
     try {
       setUpdatingId(id)
       setError(null)
@@ -114,12 +145,12 @@ export default function AdminPanel() {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
-          ...authHeaders(),
+          ...authHeader,
         },
         body: JSON.stringify({ status }),
       })
       if (res.status === 401) {
-        forceRelogin()
+        onSessionInvalid()
         return
       }
       if (!res.ok) {
@@ -136,10 +167,6 @@ export default function AdminPanel() {
     }
   }
 
-  if (!token) {
-    return <AdminLogin onLoggedIn={() => setToken(getAdminToken())} />
-  }
-
   return (
     <div className="flex justify-center px-4">
       <div className="w-full max-w-6xl py-10">
@@ -153,11 +180,16 @@ export default function AdminPanel() {
               dura 7 días o hasta que cierres la pestaña (token en{' '}
               <code className="text-slate-500">sessionStorage</code>).
             </p>
+            <p className="text-slate-500 text-xs mt-2">
+              Si cambiaste <code className="text-slate-600">JWT_SECRET</code> en
+              el servidor, volvé a iniciar sesión (el token anterior deja de
+              ser válido).
+            </p>
           </div>
           <button
             type="button"
             onClick={() => {
-              forceRelogin()
+              onSessionInvalid()
             }}
             className="shrink-0 text-sm px-4 py-2 rounded border border-slate-600 text-slate-300 hover:bg-slate-800 transition-colors"
           >
@@ -227,7 +259,8 @@ export default function AdminPanel() {
                       colSpan={7}
                       className="px-4 py-8 text-center text-slate-500"
                     >
-                      No hay turnos para esta fecha{filtroBarberLabel(filterBarberId, barbers)}.
+                      No hay turnos para esta fecha
+                      {filtroBarberLabel(filterBarberId, barbers)}.
                     </td>
                   </tr>
                 )}
@@ -256,7 +289,10 @@ export default function AdminPanel() {
                     <td className="px-4 py-3 text-slate-400 text-xs">
                       <div>{r.customer_phone}</div>
                       {r.customer_email && (
-                        <div className="truncate max-w-[140px]" title={r.customer_email}>
+                        <div
+                          className="truncate max-w-[140px]"
+                          title={r.customer_email}
+                        >
                           {r.customer_email}
                         </div>
                       )}
@@ -314,7 +350,9 @@ export default function AdminPanel() {
                   {r.customer_email ? ` · ${r.customer_email}` : ''}
                 </p>
                 {r.notes && (
-                  <p className="text-xs text-slate-400 italic">Nota: {r.notes}</p>
+                  <p className="text-xs text-slate-400 italic">
+                    Nota: {r.notes}
+                  </p>
                 )}
                 <ActionButtons
                   status={r.status as AppointmentStatus}
