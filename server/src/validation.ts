@@ -57,3 +57,7 @@ export const UpdateAppointmentStatusBody = z.object({
   status: z.enum(['pending', 'confirmed', 'cancelled']),
 });
 
+export const AdminLoginBody = z.object({
+  password: z.string().min(1),
+});
+

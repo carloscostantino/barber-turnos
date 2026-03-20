@@ -25,6 +25,8 @@ services:
       CLIENT_ORIGIN: http://localhost:5173
       TIMEZONE: America/Argentina/Buenos_Aires
       WHATSAPP_NUMBER: 5491112345678
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-min-16-chars!!}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin12345}
     depends_on:
       db:
         condition: service_healthy

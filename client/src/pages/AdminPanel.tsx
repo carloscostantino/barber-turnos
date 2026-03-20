@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
+import { clearAdminToken, getAdminToken } from '../adminToken'
 import { API_BASE } from '../config'
 import { dayRangeIso, formatDate, formatTime, toInputDate } from '../lib/format'
+import AdminLogin from './AdminLogin'
 
 type Barber = { id: string; name: string }
 
@@ -35,6 +37,7 @@ function statusClass(s: string) {
 }
 
 export default function AdminPanel() {
+  const [token, setToken] = useState<string | null>(() => getAdminToken())
   const [barbers, setBarbers] = useState<Barber[]>([])
   const [filterBarberId, setFilterBarberId] = useState<string | ''>('')
   const [date, setDate] = useState(() => toInputDate(new Date()))
@@ -42,6 +45,18 @@ export default function AdminPanel() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [updatingId, setUpdatingId] = useState<string | null>(null)
+
+  const authHeaders = useCallback(
+    () => ({
+      Authorization: `Bearer ${token}`,
+    }),
+    [token],
+  )
+
+  const forceRelogin = useCallback(() => {
+    clearAdminToken()
+    setToken(null)
+  }, [])
 
   useEffect(() => {
     void (async () => {
@@ -57,13 +72,20 @@ export default function AdminPanel() {
   }, [])
 
   const loadAppointments = useCallback(async () => {
+    if (!token) return
     try {
       setError(null)
       setLoading(true)
       const { from, to } = dayRangeIso(date)
       const params = new URLSearchParams({ from, to })
       if (filterBarberId) params.set('barberId', filterBarberId)
-      const res = await fetch(`${API_BASE}/appointments?${params}`)
+      const res = await fetch(`${API_BASE}/appointments?${params}`, {
+        headers: authHeaders(),
+      })
+      if (res.status === 401) {
+        forceRelogin()
+        return
+      }
       if (!res.ok) {
         const data = (await res.json().catch(() => null)) as {
           error?: string
@@ -77,21 +99,29 @@ export default function AdminPanel() {
     } finally {
       setLoading(false)
     }
-  }, [date, filterBarberId])
+  }, [authHeaders, date, filterBarberId, forceRelogin, token])
 
   useEffect(() => {
     void loadAppointments()
   }, [loadAppointments])
 
   const patchStatus = async (id: string, status: AppointmentStatus) => {
+    if (!token) return
     try {
       setUpdatingId(id)
       setError(null)
       const res = await fetch(`${API_BASE}/appointments/${id}/status`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeaders(),
+        },
         body: JSON.stringify({ status }),
       })
+      if (res.status === 401) {
+        forceRelogin()
+        return
+      }
       if (!res.ok) {
         const data = (await res.json().catch(() => null)) as {
           error?: string
@@ -106,17 +136,33 @@ export default function AdminPanel() {
     }
   }
 
+  if (!token) {
+    return <AdminLogin onLoggedIn={() => setToken(getAdminToken())} />
+  }
+
   return (
     <div className="flex justify-center px-4">
       <div className="w-full max-w-6xl py-10">
-        <header className="mb-8">
-          <h1 className="text-3xl font-semibold tracking-tight">
-            Panel de turnos
-          </h1>
-          <p className="text-slate-400 mt-1">
-            Vista del día: confirmá, cancelá o revisá reservas. Sin login por
-            ahora — usalo en red privada o agregá auth más adelante.
-          </p>
+        <header className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight">
+              Panel de turnos
+            </h1>
+            <p className="text-slate-400 mt-1">
+              Vista del día: confirmá, cancelá o revisá reservas. La sesión
+              dura 7 días o hasta que cierres la pestaña (token en{' '}
+              <code className="text-slate-500">sessionStorage</code>).
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              forceRelogin()
+            }}
+            className="shrink-0 text-sm px-4 py-2 rounded border border-slate-600 text-slate-300 hover:bg-slate-800 transition-colors"
+          >
+            Cerrar sesión
+          </button>
         </header>
 
         <div className="flex flex-col sm:flex-row sm:flex-wrap gap-4 mb-6 items-start sm:items-end">

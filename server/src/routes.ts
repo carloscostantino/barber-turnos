@@ -1,9 +1,10 @@
 import { Router } from 'express';
-import { z } from 'zod';
+import { requireAdmin, signAdminToken, verifyAdminPassword } from './adminAuth';
 import { pool } from './db';
 import { env } from './env';
 import { getService, listAppointments, listBarbers, listServices } from './api';
 import {
+  AdminLoginBody,
   AvailabilityQuery,
   CreateAppointmentBody,
   formatZodError,
@@ -24,7 +25,20 @@ router.get('/services', async (_req, res) => {
   res.json(services);
 });
 
-router.get('/appointments', async (req, res) => {
+router.post('/admin/login', async (req, res) => {
+  const parsed = AdminLoginBody.safeParse(req.body);
+  if (!parsed.success)
+    return res.status(400).json({ error: formatZodError(parsed.error) });
+
+  if (!verifyAdminPassword(parsed.data.password)) {
+    return res.status(401).json({ error: 'credenciales incorrectas' });
+  }
+
+  const token = signAdminToken();
+  res.json({ token, expiresInSec: 7 * 24 * 60 * 60 });
+});
+
+router.get('/appointments', requireAdmin, async (req, res) => {
   const parsed = ListAppointmentsQuery.safeParse(req.query);
   if (!parsed.success)
     return res.status(400).json({ error: formatZodError(parsed.error) });
@@ -37,7 +51,7 @@ router.get('/appointments', async (req, res) => {
   res.json(rows);
 });
 
-router.patch('/appointments/:id/status', async (req, res) => {
+router.patch('/appointments/:id/status', requireAdmin, async (req, res) => {
   const idParsed = UUID.safeParse(req.params.id);
   if (!idParsed.success) return res.status(400).json({ error: 'id inválido' });
 

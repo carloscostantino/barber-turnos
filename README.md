@@ -50,6 +50,7 @@ Aplicación fullstack para gestionar turnos de una barbería: barberos, servicio
     - `db.ts` – pool de conexión a Postgres
     - `index.ts` – arranque del servidor Express
     - `routes.ts` – rutas HTTP principales
+    - `adminAuth.ts` – JWT del panel y middleware `requireAdmin`
     - `api.ts` – consultas reutilizables a la base
     - `validation.ts` – esquemas de validación (body/query)
 - `client/`
@@ -85,6 +86,10 @@ Basadas en `server/.env.example`:
 - `CLIENT_ORIGIN=http://localhost:5173`
 - `TIMEZONE=America/Argentina/Buenos_Aires`
 - `WHATSAPP_NUMBER=5491112345678` (placeholder para uso futuro)
+- `JWT_SECRET` — mínimo 16 caracteres; firma el JWT del panel admin.
+- `ADMIN_PASSWORD` — mínimo 8 caracteres; contraseña del login en `/admin`.
+
+En **Docker Compose**, `api` define valores por defecto para desarrollo; en producción definí `JWT_SECRET` y `ADMIN_PASSWORD` en un `.env` junto al `docker-compose.yml` o en el orquestador.
 
 ### Endpoints actuales del backend
 
@@ -109,8 +114,15 @@ Todos los endpoints de negocio están colgados bajo `/api`.
       - `service` (datos del servicio)
       - `slots`: array de `{ startsAt, endsAt }` en ISO (UTC).
 
+- **Panel admin (auth)**
+  - `POST /api/admin/login`  
+    - Body: `{ "password": "<ADMIN_PASSWORD>" }`.  
+    - Respuesta OK: `{ "token": "<jwt>", "expiresInSec": 604800 }` (7 días).  
+    - El cliente guarda el token en `sessionStorage` y lo envía como `Authorization: Bearer <token>` en las rutas protegidas.
+
 - **Turnos**
   - `GET /api/appointments?barberId=<uuid>&from=<ISO>&to=<ISO>`  
+    - **Requiere** cabecera `Authorization: Bearer <jwt>`.  
     - Lista turnos que intersectan el rango `[from, to)`; opcionalmente filtra por `barberId`.
     - Cada fila incluye datos del barbero, servicio y cliente (`barber_name`, `service_name`, `customer_name`, `customer_phone`, `customer_email`).
   - `POST /api/appointments`  
@@ -129,7 +141,8 @@ Todos los endpoints de negocio están colgados bajo `/api`.
       - Chequeo de que no hay otro turno que se solape para ese barbero.
       - Inserta turno con `status = 'pending'`.
   - `PATCH /api/appointments/:id/status`  
-    - Actualiza el estado del turno a `pending | confirmed | cancelled`.
+    - **Requiere** `Authorization: Bearer <jwt>`.  
+    - Body: `{ "status": "pending" | "confirmed" | "cancelled" }`.
 
 ### Seeds / datos iniciales
 
@@ -168,6 +181,7 @@ Servicios:
 - **web**: frontend en `http://localhost:5173`
   - Vite se levanta dentro del contenedor, expuesto a tu máquina.
   - Consume la API usando `VITE_API_BASE=http://localhost:3001/api`.
+  - Panel admin (Docker): contraseña por defecto `ADMIN_PASSWORD=admin12345` si no definís variables en `.env` (cambiala en producción).
 
 Para ver logs:
 
@@ -228,12 +242,12 @@ Si preferís un ciclo de desarrollo más rápido mientras editás código:
 
 - **Frontend**
   - **`/`** — Reserva pública: barbero, servicio, fecha, slots, datos del cliente y `POST /api/appointments`.
-  - **`/admin`** — Panel interno: turnos del día (filtro por barbero), confirmar / cancelar / volver a pendiente vía `PATCH /api/appointments/:id/status`.
-  - Navegación con `react-router-dom`. El panel admin **no tiene autenticación** todavía.
+  - **`/admin`** — Login con contraseña → JWT en `sessionStorage`; listado del día y acciones con `Authorization: Bearer`.
+  - Navegación con `react-router-dom`.
 
 ### Próximos pasos sugeridos
 
-- Autenticación (o al menos un token/secreto en URL) para `/admin`.
+- Usuarios múltiples / roles, o contraseñas hasheadas con bcrypt.
 - Integrar eventualmente recordatorios por WhatsApp/SMS usando `WHATSAPP_NUMBER`.
 
 ---
