@@ -4,6 +4,22 @@ import { API_BASE } from '../config'
 import { dayRangeIso, formatDate, formatTime, toInputDate } from '../lib/format'
 import AdminLogin from './AdminLogin'
 
+/** Limpia sesión y recarga la app: evita estado React colgado si el JWT ya no sirve (401). */
+function reloadToLogin() {
+  clearAdminToken()
+  window.location.reload()
+}
+
+function normalizeStoredToken(raw: string | null): string | null {
+  if (!raw) return null
+  const parts = raw.split('.')
+  if (parts.length !== 3 || parts.some((p) => !p)) {
+    clearAdminToken()
+    return null
+  }
+  return raw
+}
+
 type Barber = { id: string; name: string }
 
 type AppointmentRow = {
@@ -38,7 +54,9 @@ function statusClass(s: string) {
 
 /** Solo monta efectos de turnos cuando ya hay JWT (evita ruido y estados raros en la pantalla de login). */
 export default function AdminPanel() {
-  const [token, setToken] = useState<string | null>(() => getAdminToken())
+  const [token, setToken] = useState<string | null>(() =>
+    normalizeStoredToken(getAdminToken()),
+  )
 
   const onSessionInvalid = useCallback(() => {
     clearAdminToken()
@@ -46,7 +64,7 @@ export default function AdminPanel() {
   }, [])
 
   const onLoggedIn = useCallback(() => {
-    setToken(getAdminToken())
+    setToken(normalizeStoredToken(getAdminToken()))
   }, [])
 
   if (!token) {
@@ -110,7 +128,7 @@ function AdminAuthenticatedPanel({
           throw e
         }
         if (res.status === 401) {
-          onSessionInvalid()
+          reloadToLogin()
           return
         }
         if (!res.ok) {
@@ -128,7 +146,7 @@ function AdminAuthenticatedPanel({
         setLoading(false)
       }
     },
-    [token, date, filterBarberId, onSessionInvalid],
+    [token, date, filterBarberId],
   )
 
   useEffect(() => {
@@ -150,7 +168,7 @@ function AdminAuthenticatedPanel({
         body: JSON.stringify({ status }),
       })
       if (res.status === 401) {
-        onSessionInvalid()
+        reloadToLogin()
         return
       }
       if (!res.ok) {
