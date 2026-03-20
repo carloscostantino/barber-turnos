@@ -1,5 +1,19 @@
 ## Sistema de turnos para barbería
 
+### Repositorio en GitHub
+
+- **Remoto `origin`:** `https://github.com/carloscostantino/barber-turnos.git`
+- **Convención para el asistente (Cursor):** después de cambios de código, hacer `git add`, `commit` y **intentar** `git push` a `origin` en la rama `main` cuando el usuario lo pida o cuando indique que quiere publicar cambios.
+- **Límite técnico:** el `git push` solo funciona si en esta máquina ya está configurada la autenticación con GitHub (por ejemplo Git Credential Manager, token guardado o SSH). Si el push falla por credenciales, el usuario debe ejecutar `git push` una vez en su terminal autenticada o configurar [SSH](https://docs.github.com/en/authentication/connecting-to-github-with-ssh) / [HTTPS + token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
+
+```bash
+git remote -v
+# origin  https://github.com/carloscostantino/barber-turnos.git (fetch)
+# origin  https://github.com/carloscostantino/barber-turnos.git (push)
+```
+
+---
+
 Aplicación fullstack para gestionar turnos de una barbería: barberos, servicios, clientes y reservas, con backend en Node/Express + Postgres y frontend en React/Vite.
 
 ### Stack técnico
