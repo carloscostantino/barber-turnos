@@ -1,0 +1,45 @@
+services:
+  db:
+    image: postgres:16
+    container_name: barber_turnos_db
+    environment:
+      POSTGRES_DB: barber_turnos
+      POSTGRES_USER: barber
+      POSTGRES_PASSWORD: barber
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U barber -d barber_turnos"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: ./server
+    container_name: barber_turnos_api
+    environment:
+      DATABASE_URL: postgres://barber:barber@db:5432/barber_turnos
+      PORT: 3001
+      CLIENT_ORIGIN: http://localhost:5173
+      TIMEZONE: America/Argentina/Buenos_Aires
+      WHATSAPP_NUMBER: 5491112345678
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3001:3001"
+
+  web:
+    build: ./client
+    container_name: barber_turnos_web
+    environment:
+      VITE_API_BASE: http://localhost:3001/api
+    depends_on:
+      - api
+    ports:
+      - "5173:5173"
+
+volumes:
+  db_data:
