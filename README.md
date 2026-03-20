@@ -111,7 +111,8 @@ Todos los endpoints de negocio están colgados bajo `/api`.
 
 - **Turnos**
   - `GET /api/appointments?barberId=<uuid>&from=<ISO>&to=<ISO>`  
-    - Lista turnos de un barbero en un rango de fechas (o todos los barberos si `barberId` se omite).
+    - Lista turnos que intersectan el rango `[from, to)`; opcionalmente filtra por `barberId`.
+    - Cada fila incluye datos del barbero, servicio y cliente (`barber_name`, `service_name`, `customer_name`, `customer_phone`, `customer_email`).
   - `POST /api/appointments`  
     - Crea un turno nuevo con validación y chequeo de solapamiento.
     - Body esperado:
@@ -222,23 +223,17 @@ Si preferís un ciclo de desarrollo más rápido mientras editás código:
     - Catálogos de barberos y servicios.
     - Cálculo de disponibilidad diaria por barbero/servicio.
     - Creación de turnos con validación y control de solapamiento.
-    - Listado de turnos y cambio de estado.
+    - Listado de turnos (con nombres vía JOINs) y cambio de estado.
   - Probado manualmente con requests locales (creación/listado de turno correcto).
 
 - **Frontend**
-  - Sigue siendo el template base de Vite/React.
-  - Aún no hay pantallas específicas para:
-    - Seleccionar barbero/servicio.
-    - Ver calendario/disponibilidad.
-    - Crear turnos desde la UI.
+  - **`/`** — Reserva pública: barbero, servicio, fecha, slots, datos del cliente y `POST /api/appointments`.
+  - **`/admin`** — Panel interno: turnos del día (filtro por barbero), confirmar / cancelar / volver a pendiente vía `PATCH /api/appointments/:id/status`.
+  - Navegación con `react-router-dom`. El panel admin **no tiene autenticación** todavía.
 
 ### Próximos pasos sugeridos
 
-- Diseñar y crear UI en `client` para:
-  - Seleccionar barbero + servicio.
-  - Elegir fecha y horario disponible (consumiendo `/api/availability`).
-  - Cargar datos del cliente y confirmar turno (consumiendo `POST /api/appointments`).
-- Agregar autenticación ligera para panel interno (barbero/recepción) más adelante.
+- Autenticación (o al menos un token/secreto en URL) para `/admin`.
 - Integrar eventualmente recordatorios por WhatsApp/SMS usando `WHATSAPP_NUMBER`.
 
 ---
