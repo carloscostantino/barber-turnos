@@ -41,6 +41,7 @@ Aplicación fullstack para gestionar turnos de una barbería: barberos, servicio
   - `client/` – frontend React/Vite
   - `server/` – backend API
 - `docker-compose.yml` – servicio de base de datos Postgres
+- `playwright.config.ts`, carpeta `e2e/` – pruebas end-to-end
 - `server/`
   - `package.json`, `tsconfig.json`
   - `.env.example` → se copia a `.env`
@@ -228,6 +229,30 @@ Si preferís un ciclo de desarrollo más rápido mientras editás código:
 
    - UI en: `http://localhost:5173`
    - API en: `http://localhost:3001`
+
+### Tests E2E (Playwright)
+
+En la **raíz** del monorepo:
+
+```bash
+npm install
+npx playwright install chromium   # una vez por máquina (o npm run test:e2e:install)
+```
+
+Requisitos: **Postgres** con el `DATABASE_URL` de `server/.env` (p. ej. `docker compose up -d db`). Si tu `.env` no tiene `JWT_SECRET` / `ADMIN_PASSWORD`, Playwright inyecta valores solo para levantar el API de prueba; el login del test usa `E2E_ADMIN_PASSWORD` o `admin12345`.
+
+- Playwright levanta **`npm run dev:e2e`**: API en **3002**, Vite en **5174** y `VITE_API_BASE` → ese API (no pisa Docker en 3001/5173). CORS: `CLIENT_ORIGIN=http://127.0.0.1:5174`.
+- Si querés reutilizar un servidor ya levantado en 5174: `PW_TEST_REUSE_SERVER=1` (tiene que ser el mismo código que estás testeando).
+
+Comandos:
+
+```bash
+npm run test:e2e          # headless
+npm run test:e2e:headed   # con ventana
+npm run test:e2e:ui       # modo interactivo
+```
+
+Variable opcional: **`E2E_ADMIN_PASSWORD`** — si no está definida, los tests usan `admin12345` (valor por defecto de Docker Compose).
 
 ### Estado actual del desarrollo
 

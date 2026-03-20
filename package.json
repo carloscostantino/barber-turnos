@@ -9,11 +9,20 @@
   ],
   "scripts": {
     "dev": "concurrently -n server,client -c blue,green \"npm run dev -w server\" \"npm run dev -w client\"",
+    "dev:e2e": "concurrently -n server,client -c blue,green \"npm run dev -w server\" \"npm run dev -w client -- --host 127.0.0.1 --port 5174\"",
     "dev:client": "npm run dev -w client",
-    "dev:server": "npm run dev -w server"
+    "dev:server": "npm run dev -w server",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:install": "playwright install chromium"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs"
+  "type": "commonjs",
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "concurrently": "^9.2.1"
+  }
 }
