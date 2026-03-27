@@ -1,4 +1,5 @@
 import { timingSafeEqual } from 'crypto';
+import bcrypt from 'bcrypt';
 import type { Request, RequestHandler, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { env } from './env';
@@ -33,9 +34,13 @@ export const requireAdmin: RequestHandler = (req: Request, res: Response, next) 
   }
 };
 
-export function verifyAdminPassword(candidate: string): boolean {
+export async function verifyAdminPassword(candidate: string): Promise<boolean> {
+  if (env.ADMIN_PASSWORD_BCRYPT) {
+    return bcrypt.compare(candidate, env.ADMIN_PASSWORD_BCRYPT);
+  }
+  const plain = env.ADMIN_PASSWORD!;
   const a = Buffer.from(candidate, 'utf8');
-  const b = Buffer.from(env.ADMIN_PASSWORD, 'utf8');
+  const b = Buffer.from(plain, 'utf8');
   if (a.length !== b.length) return false;
   return timingSafeEqual(a, b);
 }

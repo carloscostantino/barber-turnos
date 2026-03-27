@@ -2,11 +2,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { API_BASE } from '../config'
 import { formatDate, formatTime, toInputDate } from '../lib/format'
 
-type Barber = {
-  id: string
-  name: string
-}
-
 type Service = {
   id: string
   name: string
@@ -26,11 +21,19 @@ type AppointmentCreated = {
   status: string
 }
 
-export default function BookingPage() {
-  const [barbers, setBarbers] = useState<Barber[]>([])
-  const [services, setServices] = useState<Service[]>([])
+type PublicSettings = {
+  whatsappNumber?: string | null
+  timezone: string
+  bookingMinLeadHours: number
+  bookingMaxDaysAhead: number
+}
 
-  const [selectedBarberId, setSelectedBarberId] = useState<string | ''>('')
+export default function BookingPage() {
+  const [services, setServices] = useState<Service[]>([])
+  const [publicSettings, setPublicSettings] = useState<PublicSettings | null>(
+    null,
+  )
+
   const [selectedServiceId, setSelectedServiceId] = useState<string | ''>('')
   const [date, setDate] = useState(() => toInputDate(new Date()))
 
@@ -46,35 +49,69 @@ export default function BookingPage() {
   const [loadingSlots, setLoadingSlots] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<AppointmentCreated | null>(null)
+  const [whatsappNumber, setWhatsappNumber] = useState<string | null>(null)
+
+  const { minDateStr, maxDateStr } = useMemo(() => {
+    if (!publicSettings) {
+      const t = new Date()
+      return {
+        minDateStr: toInputDate(t),
+        maxDateStr: toInputDate(t),
+      }
+    }
+    const minD = new Date()
+    minD.setHours(minD.getHours() + publicSettings.bookingMinLeadHours)
+    const maxD = new Date()
+    maxD.setDate(maxD.getDate() + publicSettings.bookingMaxDaysAhead)
+    return {
+      minDateStr: toInputDate(minD),
+      maxDateStr: toInputDate(maxD),
+    }
+  }, [publicSettings])
 
   const canSearchSlots = useMemo(
-    () => !!selectedBarberId && !!selectedServiceId && !!date,
-    [selectedBarberId, selectedServiceId, date],
+    () => !!selectedServiceId && !!date,
+    [selectedServiceId, date],
   )
+
+  const successWhatsappHref = useMemo(() => {
+    if (!success || !whatsappNumber) return null
+    const service = services.find((s) => s.id === selectedServiceId)
+    const lines = [
+      'Hola, acabo de reservar un turno desde la web.',
+      service && `Servicio: ${service.name}`,
+      `Fecha y hora: ${formatDate(success.starts_at)} ${formatTime(success.starts_at)}`,
+    ].filter((x): x is string => Boolean(x))
+    const digits = whatsappNumber.replace(/\D/g, '')
+    if (digits.length < 8) return null
+    return `https://wa.me/${digits}?text=${encodeURIComponent(lines.join('\n'))}`
+  }, [success, whatsappNumber, selectedServiceId, services])
 
   useEffect(() => {
     const fetchInitial = async () => {
       try {
         setError(null)
-        const [bRes, sRes] = await Promise.all([
-          fetch(`${API_BASE}/barbers`),
+        const [sRes, cfgRes] = await Promise.all([
           fetch(`${API_BASE}/services`),
+          fetch(`${API_BASE}/public-settings`),
         ])
 
-        if (!bRes.ok || !sRes.ok) {
+        if (!sRes.ok) {
           throw new Error('No se pudo cargar datos iniciales')
         }
 
-        const [bData, sData] = (await Promise.all([
-          bRes.json(),
-          sRes.json(),
-        ])) as [Barber[], Service[]]
-
-        setBarbers(bData)
+        const sData = (await sRes.json()) as Service[]
         setServices(sData)
 
-        if (bData.length > 0) setSelectedBarberId(bData[0].id)
         if (sData.length > 0) setSelectedServiceId(sData[0].id)
+
+        if (cfgRes.ok) {
+          const cfg = (await cfgRes.json()) as PublicSettings & {
+            whatsappNumber?: string | null
+          }
+          setPublicSettings(cfg)
+          setWhatsappNumber(cfg.whatsappNumber ?? null)
+        }
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'Error cargando datos'
         setError(msg)
@@ -84,6 +121,15 @@ export default function BookingPage() {
     void fetchInitial()
   }, [])
 
+  useEffect(() => {
+    if (!publicSettings) return
+    setDate((d) => {
+      if (d < minDateStr) return minDateStr
+      if (d > maxDateStr) return maxDateStr
+      return d
+    })
+  }, [publicSettings, minDateStr, maxDateStr])
+
   const handleLoadSlots = async () => {
     if (!canSearchSlots) return
     try {
@@ -92,13 +138,17 @@ export default function BookingPage() {
       setSelectedSlot(null)
 
       const params = new URLSearchParams({
-        barberId: selectedBarberId,
         serviceId: selectedServiceId,
         date,
       })
 
       const res = await fetch(`${API_BASE}/availability?${params.toString()}`)
-      if (!res.ok) throw new Error('No se pudo cargar la disponibilidad')
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) as {
+          error?: string
+        } | null
+        throw new Error(data?.error ?? 'No se pudo cargar la disponibilidad')
+      }
 
       const data = (await res.json()) as { slots: Slot[] }
       setSlots(data.slots)
@@ -115,8 +165,8 @@ export default function BookingPage() {
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (!selectedBarberId || !selectedServiceId || !selectedSlot) {
-      setError('Elegí barbero, servicio y horario.')
+    if (!selectedServiceId || !selectedSlot) {
+      setError('Elegí servicio y horario.')
       return
     }
     if (!customerName.trim() || !customerPhone.trim()) {
@@ -139,7 +189,6 @@ export default function BookingPage() {
       setLoading(true)
 
       const body = {
-        barberId: selectedBarberId,
         serviceId: selectedServiceId,
         startsAt: selectedSlot.startsAt,
         customer: {
@@ -199,30 +248,26 @@ export default function BookingPage() {
             Turnos Barbería
           </h1>
           <p className="text-slate-400 mt-1">
-            Reservá tu turno eligiendo barbero, servicio, día y horario.
+            Reservá tu turno eligiendo servicio, día y horario.
           </p>
+          {publicSettings && (
+            <p className="text-slate-500 text-xs mt-2">
+              Podés reservar con al menos {publicSettings.bookingMinLeadHours}{' '}
+              h de anticipación y hasta {publicSettings.bookingMaxDaysAhead}{' '}
+              días adelante
+              {publicSettings.timezone
+                ? ` (zona horaria: ${publicSettings.timezone})`
+                : ''}
+              .
+            </p>
+          )}
         </header>
 
         <form
           onSubmit={handleSubmit}
           className="space-y-6 bg-slate-900/60 border border-slate-800 rounded-xl p-6 shadow-lg"
         >
-          <section className="grid md:grid-cols-3 gap-4">
-            <div className="flex flex-col gap-1">
-              <label className="text-sm text-slate-300">Barbero</label>
-              <select
-                className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
-                value={selectedBarberId}
-                onChange={(e) => setSelectedBarberId(e.target.value)}
-              >
-                {barbers.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
+          <section className="grid md:grid-cols-2 gap-4">
             <div className="flex flex-col gap-1">
               <label className="text-sm text-slate-300">Servicio</label>
               <select
@@ -243,6 +288,8 @@ export default function BookingPage() {
               <label className="text-sm text-slate-300">Fecha</label>
               <input
                 type="date"
+                min={minDateStr}
+                max={maxDateStr}
                 className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
@@ -358,15 +405,27 @@ export default function BookingPage() {
               </p>
             )}
             {success && (
-              <p className="text-sm text-emerald-400 bg-emerald-950/40 border border-emerald-700 rounded px-3 py-2">
-                Turno creado correctamente para{' '}
-                {formatDate(success.starts_at)}{' '}
-                {formatTime(success.starts_at)} (estado:{' '}
-                <span className="font-semibold uppercase">
-                  {success.status}
-                </span>
-                ).
-              </p>
+              <div className="space-y-3 text-sm text-emerald-400 bg-emerald-950/40 border border-emerald-700 rounded px-3 py-2">
+                <p>
+                  Turno creado correctamente para{' '}
+                  {formatDate(success.starts_at)}{' '}
+                  {formatTime(success.starts_at)} (estado:{' '}
+                  <span className="font-semibold uppercase">
+                    {success.status}
+                  </span>
+                  ).
+                </p>
+                {successWhatsappHref && (
+                  <a
+                    href={successWhatsappHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-medium transition-colors"
+                  >
+                    Abrir WhatsApp para confirmar o consultar
+                  </a>
+                )}
+              </div>
             )}
 
             <button

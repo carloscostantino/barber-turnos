@@ -46,8 +46,7 @@ export default function AdminLogin({ onLoggedIn }: Props) {
           Panel admin
         </h1>
         <p className="text-slate-400 text-sm mb-8">
-          Ingresá la contraseña configurada en el servidor (
-          <code className="text-violet-300">ADMIN_PASSWORD</code>).
+          Ingresá la contraseña configurada en el servidor.
         </p>
         <form
           onSubmit={(e) => void handleSubmit(e)}

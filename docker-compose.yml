@@ -16,6 +16,13 @@ services:
       timeout: 3s
       retries: 20
 
+  mailpit:
+    image: axllent/mailpit:v1.21
+    container_name: barber_turnos_mailpit
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
   api:
     build: ./server
     container_name: barber_turnos_api
@@ -24,12 +31,19 @@ services:
       PORT: 3001
       CLIENT_ORIGIN: http://localhost:5173
       TIMEZONE: America/Argentina/Buenos_Aires
-      WHATSAPP_NUMBER: 5491112345678
+      WHATSAPP_NUMBER: 5492664217899
       JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-min-16-chars!!}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin12345}
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_USER: local
+      SMTP_PASS: local
+      MAIL_FROM: "Barbería <noreply@localhost>"
     depends_on:
       db:
         condition: service_healthy
+      mailpit:
+        condition: service_started
     ports:
       - "3001:3001"
 

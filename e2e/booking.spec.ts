@@ -2,14 +2,14 @@ import { expect, test } from './base';
 
 test.describe('Disponibilidad', () => {
   test('GET /api/availability responde 200 con slots', async ({ page }) => {
-    const barbersP = page.waitForResponse(
-      (r) => r.url().includes('/api/barbers') && r.ok(),
-    );
     const servicesP = page.waitForResponse(
       (r) => r.url().includes('/api/services') && r.ok(),
     );
+    const settingsP = page.waitForResponse(
+      (r) => r.url().includes('/api/public-settings') && r.ok(),
+    );
     await page.goto('/');
-    await Promise.all([barbersP, servicesP]);
+    await Promise.all([servicesP, settingsP]);
 
     await expect(
       page.getByRole('button', { name: 'Actualizar horarios' }),

@@ -3,6 +3,7 @@ import cors from 'cors';
 import { env } from './env';
 import { pool } from './db';
 import { router } from './routes';
+import { startReminderScheduler } from './reminders';
 
 const app = express();
 
@@ -25,5 +26,6 @@ app.use('/api', router);
 app.listen(env.PORT, () => {
   // eslint-disable-next-line no-console
   console.log(`API escuchando en http://localhost:${env.PORT}`);
+  startReminderScheduler();
 });
 

@@ -1,14 +1,45 @@
 import { Router } from 'express';
 import { requireAdmin, signAdminToken, verifyAdminPassword } from './adminAuth';
+import {
+  countActiveAppointmentsOverlappingRange,
+  deleteBlockedRange,
+  getAppointmentForEmail,
+  getService,
+  getSingleActiveBarberId,
+  insertBlockedRange,
+  insertService,
+  listAppointments,
+  listBarbersPublic,
+  listBlockedRanges,
+  listServices,
+  updateService,
+} from './api';
 import { pool } from './db';
 import { env } from './env';
-import { getService, listAppointments, listBarbers, listServices } from './api';
+import {
+  createMailer,
+  formatAppointmentDateTimeLabel,
+  sendAppointmentCancelledEmail,
+} from './mailer';
+import {
+  assertBookingAllowed,
+  computeAvailableSlots,
+  getShopSettings,
+  listBusinessHours,
+  replaceBusinessHours,
+  updateShopSettings,
+} from './scheduling';
 import {
   AdminLoginBody,
   AvailabilityQuery,
+  BlockedRangeCreateBody,
+  BusinessHoursPutBody,
   CreateAppointmentBody,
   formatZodError,
   ListAppointmentsQuery,
+  ServiceCreateBody,
+  ServiceUpdateBody,
+  ShopSettingsBody,
   UpdateAppointmentStatusBody,
   UUID,
 } from './validation';
@@ -16,13 +47,25 @@ import {
 export const router = Router();
 
 router.get('/barbers', async (_req, res) => {
-  const barbers = await listBarbers();
+  const barbers = await listBarbersPublic();
   res.json(barbers);
 });
 
 router.get('/services', async (_req, res) => {
-  const services = await listServices();
+  const services = await listServices(true);
   res.json(services);
+});
+
+router.get('/public-settings', async (_req, res) => {
+  const barberId = await getSingleActiveBarberId();
+  const settings = await getShopSettings();
+  res.json({
+    whatsappNumber: env.WHATSAPP_NUMBER ?? null,
+    barberId,
+    timezone: env.TIMEZONE,
+    bookingMinLeadHours: settings.bookingMinLeadHours,
+    bookingMaxDaysAhead: settings.bookingMaxDaysAhead,
+  });
 });
 
 router.post('/admin/login', async (req, res) => {
@@ -30,7 +73,7 @@ router.post('/admin/login', async (req, res) => {
   if (!parsed.success)
     return res.status(400).json({ error: formatZodError(parsed.error) });
 
-  if (!verifyAdminPassword(parsed.data.password)) {
+  if (!(await verifyAdminPassword(parsed.data.password))) {
     return res.status(401).json({ error: 'credenciales incorrectas' });
   }
 
@@ -59,12 +102,45 @@ router.patch('/appointments/:id/status', requireAdmin, async (req, res) => {
   if (!bodyParsed.success)
     return res.status(400).json({ error: formatZodError(bodyParsed.error) });
 
+  const prev = await pool.query<{ status: string }>(
+    `select status from appointments where id = $1`,
+    [idParsed.data],
+  );
+  if (!prev.rows[0]) return res.status(404).json({ error: 'turno no encontrado' });
+
   const result = await pool.query(
     `update appointments set status = $2 where id = $1 returning id, status`,
     [idParsed.data, bodyParsed.data.status],
   );
   const row = result.rows[0];
   if (!row) return res.status(404).json({ error: 'turno no encontrado' });
+
+  if (
+    bodyParsed.data.status === 'cancelled' &&
+    prev.rows[0].status !== 'cancelled'
+  ) {
+    const appt = await getAppointmentForEmail(idParsed.data);
+    if (appt?.email && appt.email.trim()) {
+      const transporter = createMailer();
+      if (transporter) {
+        try {
+          await sendAppointmentCancelledEmail(transporter, {
+            to: appt.email.trim(),
+            customerName: appt.customer_name,
+            serviceName: appt.service_name,
+            startsAtLabel: formatAppointmentDateTimeLabel(new Date(appt.starts_at)),
+          });
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error(
+            '[cancel email]',
+            e instanceof Error ? e.message : e,
+          );
+        }
+      }
+    }
+  }
+
   res.json(row);
 });
 
@@ -73,55 +149,25 @@ router.get('/availability', async (req, res) => {
   if (!parsed.success)
     return res.status(400).json({ error: formatZodError(parsed.error) });
 
-  const service = await getService(parsed.data.serviceId);
-  if (!service) return res.status(404).json({ error: 'servicio no encontrado' });
+  const barberId = await getSingleActiveBarberId();
+  if (!barberId) {
+    return res.status(503).json({ error: 'no hay barbero activo configurado' });
+  }
 
-  const durationMin = service.duration_minutes;
+  const result = await computeAvailableSlots({
+    dateStr: parsed.data.date,
+    barberId,
+    serviceId: parsed.data.serviceId,
+  });
 
-  // Ventana base (día) en timezone configurada: 09:00-19:00.
-  // Implementación simple: asumimos que `date` viene en el timezone del negocio
-  // y generamos slots en esa misma zona usando offset local del servidor.
-  const dayStart = new Date(`${parsed.data.date}T09:00:00`);
-  const dayEnd = new Date(`${parsed.data.date}T19:00:00`);
-
-  const existing = await pool.query(
-    `
-      select starts_at, ends_at
-      from appointments
-      where barber_id = $1
-        and status <> 'cancelled'
-        and starts_at < $2
-        and ends_at > $3
-      order by starts_at asc
-    `,
-    [parsed.data.barberId, dayEnd, dayStart],
-  );
-
-  const busy = existing.rows.map((r) => ({
-    startsAt: new Date(r.starts_at).getTime(),
-    endsAt: new Date(r.ends_at).getTime(),
-  }));
-
-  const slots: { startsAt: string; endsAt: string }[] = [];
-  const stepMs = 15 * 60 * 1000;
-  const durationMs = durationMin * 60 * 1000;
-
-  for (let t = dayStart.getTime(); t + durationMs <= dayEnd.getTime(); t += stepMs) {
-    const slotStart = t;
-    const slotEnd = t + durationMs;
-    const overlaps = busy.some((b) => slotStart < b.endsAt && slotEnd > b.startsAt);
-    if (!overlaps) {
-      slots.push({
-        startsAt: new Date(slotStart).toISOString(),
-        endsAt: new Date(slotEnd).toISOString(),
-      });
-    }
+  if ('error' in result) {
+    return res.status(404).json({ error: result.error });
   }
 
   res.json({
-    timezone: env.TIMEZONE,
-    service,
-    slots,
+    timezone: result.timezone,
+    service: result.service,
+    slots: result.slots,
   });
 });
 
@@ -130,19 +176,33 @@ router.post('/appointments', async (req, res) => {
   if (!parsed.success)
     return res.status(400).json({ error: formatZodError(parsed.error) });
 
+  const barberId = await getSingleActiveBarberId();
+  if (!barberId) {
+    return res.status(503).json({ error: 'no hay barbero activo configurado' });
+  }
+
   const service = await getService(parsed.data.serviceId);
   if (!service) return res.status(404).json({ error: 'servicio no encontrado' });
 
   const startsAt = new Date(parsed.data.startsAt);
-  if (Number.isNaN(startsAt.getTime())) return res.status(400).json({ error: 'startsAt inválido' });
+  if (Number.isNaN(startsAt.getTime()))
+    return res.status(400).json({ error: 'startsAt inválido' });
 
-  const endsAt = new Date(startsAt.getTime() + service.duration_minutes * 60 * 1000);
+  const allowed = await assertBookingAllowed({
+    startsAt,
+    barberId,
+    serviceId: parsed.data.serviceId,
+  });
+  if (!allowed.ok) return res.status(400).json({ error: allowed.error });
+
+  const endsAt = new Date(
+    startsAt.getTime() + service.duration_minutes * 60 * 1000,
+  );
 
   const client = await pool.connect();
   try {
     await client.query('begin');
 
-    // Upsert de cliente por teléfono.
     const customerResult = await client.query(
       `
         insert into customers (name, phone, email)
@@ -157,7 +217,6 @@ router.post('/appointments', async (req, res) => {
     const customerId = customerResult.rows[0]?.id as string | undefined;
     if (!customerId) throw new Error('no se pudo crear/leer customer');
 
-    // Chequeo de solapamiento (y lock suave por ventana).
     const overlap = await client.query(
       `
         select 1
@@ -168,7 +227,7 @@ router.post('/appointments', async (req, res) => {
           and ends_at > $3
         limit 1
       `,
-      [parsed.data.barberId, endsAt, startsAt],
+      [barberId, endsAt, startsAt],
     );
     if (overlap.rowCount && overlap.rowCount > 0) {
       await client.query('rollback');
@@ -184,7 +243,7 @@ router.post('/appointments', async (req, res) => {
         returning id, barber_id, service_id, customer_id, starts_at, ends_at, status, notes, created_at
       `,
       [
-        parsed.data.barberId,
+        barberId,
         parsed.data.serviceId,
         customerId,
         startsAt,
@@ -204,3 +263,133 @@ router.post('/appointments', async (req, res) => {
   }
 });
 
+router.get('/admin/shop-settings', requireAdmin, async (_req, res) => {
+  const s = await getShopSettings();
+  res.json(s);
+});
+
+router.put('/admin/shop-settings', requireAdmin, async (req, res) => {
+  const parsed = ShopSettingsBody.safeParse(req.body);
+  if (!parsed.success)
+    return res.status(400).json({ error: formatZodError(parsed.error) });
+  const s = await updateShopSettings({
+    bookingMinLeadHours: parsed.data.bookingMinLeadHours,
+    bookingMaxDaysAhead: parsed.data.bookingMaxDaysAhead,
+  });
+  res.json(s);
+});
+
+router.get('/admin/business-hours', requireAdmin, async (_req, res) => {
+  const rows = await listBusinessHours();
+  res.json(rows);
+});
+
+router.put('/admin/business-hours', requireAdmin, async (req, res) => {
+  const parsed = BusinessHoursPutBody.safeParse(req.body);
+  if (!parsed.success)
+    return res.status(400).json({ error: formatZodError(parsed.error) });
+
+  const daySet = new Set(parsed.data.map((d) => d.dayOfWeek));
+  if (daySet.size !== 7) {
+    return res.status(400).json({
+      error: 'enviá los 7 días de la semana (0–6) sin repetir',
+    });
+  }
+
+  for (const row of parsed.data) {
+    if (!row.isClosed) {
+      if (!row.openTime || !row.closeTime) {
+        return res.status(400).json({
+          error: `día ${row.dayOfWeek}: si abre, indicá hora de apertura y cierre`,
+        });
+      }
+      if (row.openTime >= row.closeTime) {
+        return res.status(400).json({
+          error: `día ${row.dayOfWeek}: la apertura debe ser antes del cierre`,
+        });
+      }
+    }
+  }
+
+  await replaceBusinessHours(
+    parsed.data.map((r) => ({
+      dayOfWeek: r.dayOfWeek,
+      isClosed: r.isClosed,
+      openTime: r.openTime,
+      closeTime: r.closeTime,
+    })),
+  );
+  res.json({ ok: true });
+});
+
+router.get('/admin/services', requireAdmin, async (_req, res) => {
+  const rows = await listServices(false);
+  res.json(rows);
+});
+
+router.post('/admin/services', requireAdmin, async (req, res) => {
+  const parsed = ServiceCreateBody.safeParse(req.body);
+  if (!parsed.success)
+    return res.status(400).json({ error: formatZodError(parsed.error) });
+  const row = await insertService(parsed.data);
+  res.status(201).json(row);
+});
+
+router.patch('/admin/services/:id', requireAdmin, async (req, res) => {
+  const idParsed = UUID.safeParse(req.params.id);
+  if (!idParsed.success) return res.status(400).json({ error: 'id inválido' });
+  const parsed = ServiceUpdateBody.safeParse(req.body);
+  if (!parsed.success)
+    return res.status(400).json({ error: formatZodError(parsed.error) });
+  if (Object.keys(parsed.data).length === 0) {
+    return res.status(400).json({ error: 'sin cambios' });
+  }
+  const row = await updateService(idParsed.data, parsed.data);
+  if (!row) return res.status(404).json({ error: 'servicio no encontrado' });
+  res.json(row);
+});
+
+router.get('/admin/blocked-ranges', requireAdmin, async (_req, res) => {
+  const rows = await listBlockedRanges();
+  res.json(rows);
+});
+
+router.post('/admin/blocked-ranges', requireAdmin, async (req, res) => {
+  const parsed = BlockedRangeCreateBody.safeParse(req.body);
+  if (!parsed.success)
+    return res.status(400).json({ error: formatZodError(parsed.error) });
+
+  const startsAt = new Date(parsed.data.startsAt);
+  const endsAt = new Date(parsed.data.endsAt);
+  if (!(endsAt > startsAt)) {
+    return res.status(400).json({ error: 'endsAt debe ser posterior a startsAt' });
+  }
+
+  const barberId = await getSingleActiveBarberId();
+  const n = await countActiveAppointmentsOverlappingRange(
+    startsAt,
+    endsAt,
+    barberId ?? undefined,
+  );
+  if (n > 0) {
+    return res.status(409).json({
+      error:
+        'hay turnos activos en ese rango; cancelalos o reubicá antes de bloquear',
+    });
+  }
+
+  const row = await insertBlockedRange({
+    startsAt,
+    endsAt,
+    note: parsed.data.note,
+  });
+  res.status(201).json(row);
+});
+
+router.delete('/admin/blocked-ranges/:id', requireAdmin, async (req, res) => {
+  const idParsed = UUID.safeParse(req.params.id);
+  if (!idParsed.success) return res.status(400).json({ error: 'id inválido' });
+  const ok = await deleteBlockedRange(idParsed.data);
+  if (!ok) return res.status(404).json({ error: 'bloqueo no encontrado' });
+  res.status(204).send();
+});

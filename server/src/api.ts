@@ -8,30 +8,44 @@ const ServiceRowSchema = z.object({
   name: z.string(),
   duration_minutes: z.number().int(),
   price_cents: z.number().int(),
+  active: z.boolean().optional(),
 });
 
-const BarberRowSchema = z.object({
+const BarberIdSchema = z.object({
   id: UUID,
-  name: z.string(),
 });
 
-export async function listBarbers() {
-  const result = await pool.query('select id, name from barbers order by name asc');
-  return z.array(BarberRowSchema).parse(result.rows);
+export async function listBarbersPublic() {
+  const result = await pool.query('select id from barbers where active = true order by id asc limit 1');
+  return z.array(BarberIdSchema).parse(result.rows);
 }
 
-export async function listServices() {
-  const result = await pool.query(
-    'select id, name, duration_minutes, price_cents from services order by name asc',
+/** Admin: incluye barberos inactivos. */
+export async function listBarbersAdmin() {
+  const result = await pool.query('select id, name, active from barbers order by name asc');
+  return result.rows;
+}
+
+export async function getSingleActiveBarberId(): Promise<string | null> {
+  const r = await pool.query<{ id: string }>(
+    'select id from barbers where active = true order by id asc limit 1',
   );
+  return r.rows[0]?.id ?? null;
+}
+
+export async function listServices(activeOnly = true) {
+  const sql = activeOnly
+    ? 'select id, name, duration_minutes, price_cents from services where active = true order by name asc'
+    : 'select id, name, duration_minutes, price_cents, active from services order by name asc';
+  const result = await pool.query(sql);
   return z.array(ServiceRowSchema).parse(result.rows);
 }
 
-export async function getService(serviceId: string) {
-  const result = await pool.query(
-    'select id, name, duration_minutes, price_cents from services where id = $1',
-    [serviceId],
-  );
+export async function getService(serviceId: string, activeOnly = true) {
+  const sql = activeOnly
+    ? 'select id, name, duration_minutes, price_cents from services where id = $1 and active = true'
+    : 'select id, name, duration_minutes, price_cents, active from services where id = $1';
+  const result = await pool.query(sql, [serviceId]);
   const row = result.rows[0];
   if (!row) return null;
   return ServiceRowSchema.parse(row);
@@ -61,13 +75,11 @@ export async function listAppointments(params: {
       a.status,
       a.notes,
       a.created_at,
-      b.name as barber_name,
       s.name as service_name,
       c.name as customer_name,
       c.phone as customer_phone,
       c.email as customer_email
     from appointments a
-    join barbers b on b.id = a.barber_id
     join services s on s.id = a.service_id
     join customers c on c.id = a.customer_id
     where ${where.join(' and ')}
@@ -78,3 +90,112 @@ export async function listAppointments(params: {
   return result.rows;
 }
 
+export async function getAppointmentForEmail(appointmentId: string) {
+  const r = await pool.query(
+    `select a.starts_at, a.ends_at, s.name as service_name, c.email, c.name as customer_name
+     from appointments a
+     join services s on s.id = a.service_id
+     join customers c on c.id = a.customer_id
+     where a.id = $1`,
+    [appointmentId],
+  );
+  return r.rows[0] as
+    | {
+        starts_at: Date;
+        ends_at: Date;
+        service_name: string;
+        email: string | null;
+        customer_name: string;
+      }
+    | undefined;
+}
+
+/** Solape con rango [rangeStart, rangeEnd). */
+export async function countActiveAppointmentsOverlappingRange(
+  rangeStart: Date,
+  rangeEnd: Date,
+  barberId?: string,
+): Promise<number> {
+  const params: unknown[] = [rangeStart, rangeEnd];
+  let barberClause = '';
+  if (barberId) {
+    barberClause = ' and barber_id = $3';
+    params.push(barberId);
+  }
+  const r = await pool.query<{ c: string }>(
+    `select count(*)::text as c from appointments
+     where status <> 'cancelled' and starts_at < $2 and ends_at > $1 ${barberClause}`,
+    params,
+  );
+  return parseInt(r.rows[0]?.c ?? '0', 10);
+}
+
+export async function insertService(data: {
+  name: string;
+  duration_minutes: number;
+  price_cents: number;
+}) {
+  const r = await pool.query(
+    `insert into services (name, duration_minutes, price_cents) values ($1, $2, $3)
+     returning id, name, duration_minutes, price_cents, active`,
+    [data.name, data.duration_minutes, data.price_cents],
+  );
+  return r.rows[0];
+}
+
+export async function updateService(
+  id: string,
+  data: Partial<{ name: string; duration_minutes: number; price_cents: number; active: boolean }>,
+) {
+  const fields: string[] = [];
+  const vals: unknown[] = [];
+  let n = 1;
+  if (data.name !== undefined) {
+    fields.push(`name = $${n++}`);
+    vals.push(data.name);
+  }
+  if (data.duration_minutes !== undefined) {
+    fields.push(`duration_minutes = $${n++}`);
+    vals.push(data.duration_minutes);
+  }
+  if (data.price_cents !== undefined) {
+    fields.push(`price_cents = $${n++}`);
+    vals.push(data.price_cents);
+  }
+  if (data.active !== undefined) {
+    fields.push(`active = $${n++}`);
+    vals.push(data.active);
+  }
+  if (fields.length === 0) return null;
+  vals.push(id);
+  const r = await pool.query(
+    `update services set ${fields.join(', ')} where id = $${n} returning id, name, duration_minutes, price_cents, active`,
+    vals,
+  );
+  return r.rows[0];
+}
+
+export async function listBlockedRanges() {
+  const r = await pool.query(
+    `select id, starts_at, ends_at, note, created_at from blocked_ranges order by starts_at desc`,
+  );
+  return r.rows;
+}
+
+export async function insertBlockedRange(data: {
+  startsAt: Date;
+  endsAt: Date;
+  note?: string | null;
+}) {
+  const r = await pool.query(
+    `insert into blocked_ranges (starts_at, ends_at, note) values ($1, $2, $3)
+     returning id, starts_at, ends_at, note, created_at`,
+    [data.startsAt, data.endsAt, data.note ?? null],
+  );
+  return r.rows[0];
+}
+
+export async function deleteBlockedRange(id: string): Promise<boolean> {
+  const r = await pool.query(`delete from blocked_ranges where id = $1`, [id]);
+  return (r.rowCount ?? 0) > 0;
+}
