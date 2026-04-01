@@ -55,19 +55,38 @@ export async function sendAppointmentReminderEmail(
 
 export async function sendAppointmentCancelledEmail(
   transporter: nodemailer.Transporter,
-  p: { to: string; customerName: string; serviceName: string; startsAtLabel: string },
+  p: {
+    to: string;
+    customerName: string;
+    serviceName: string;
+    startsAtLabel: string;
+    cancellationNote?: string;
+  },
 ): Promise<void> {
+  const noteBlock = p.cancellationNote?.trim()
+    ? [
+        '',
+        'Mensaje del local:',
+        p.cancellationNote.trim(),
+      ]
+    : [];
+  const noteHtml = p.cancellationNote?.trim()
+    ? `<p style="margin-top:12px;padding:10px 12px;background:#f5f5f5;border-radius:6px;border-left:3px solid #888">${escapeHtml(p.cancellationNote.trim()).replace(/\n/g, '<br/>')}</p>`
+    : '';
+
   const subject = `Turno cancelado — ${p.startsAtLabel}`;
   const text = [
     `Hola ${p.customerName},`,
     '',
     `Tu turno quedó cancelado: ${p.serviceName}, ${p.startsAtLabel}.`,
+    ...noteBlock,
     '',
     'Si no pediste esta cancelación, contactá al local.',
   ].join('\n');
   const html = `
     <p>Hola ${escapeHtml(p.customerName)},</p>
     <p>Tu turno quedó <strong>cancelado</strong>: ${escapeHtml(p.serviceName)}, ${escapeHtml(p.startsAtLabel)}.</p>
+    ${noteHtml}
     <p style="color:#666;font-size:12px">Si no pediste esta cancelación, contactá al local.</p>
   `.trim();
   await transporter.sendMail({

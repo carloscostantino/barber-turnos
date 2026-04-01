@@ -23,6 +23,7 @@ import {
 } from './mailer';
 import {
   assertBookingAllowed,
+  blockedRangeForShopCalendarDay,
   computeAvailableSlots,
   getShopSettings,
   listBusinessHours,
@@ -59,8 +60,11 @@ router.get('/services', async (_req, res) => {
 router.get('/public-settings', async (_req, res) => {
   const barberId = await getSingleActiveBarberId();
   const settings = await getShopSettings();
+  const whatsappFromDb = settings.contactWhatsapp?.trim();
   res.json({
-    whatsappNumber: env.WHATSAPP_NUMBER ?? null,
+    whatsappNumber: whatsappFromDb || env.WHATSAPP_NUMBER || null,
+    contactEmail: settings.contactEmail,
+    contactAddress: settings.contactAddress,
     barberId,
     timezone: env.TIMEZONE,
     bookingMinLeadHours: settings.bookingMinLeadHours,
@@ -102,6 +106,8 @@ router.patch('/appointments/:id/status', requireAdmin, async (req, res) => {
   if (!bodyParsed.success)
     return res.status(400).json({ error: formatZodError(bodyParsed.error) });
 
+  const cancellationNote = bodyParsed.data.cancellationNote;
+
   const prev = await pool.query<{ status: string }>(
     `select status from appointments where id = $1`,
     [idParsed.data],
@@ -129,6 +135,7 @@ router.patch('/appointments/:id/status', requireAdmin, async (req, res) => {
             customerName: appt.customer_name,
             serviceName: appt.service_name,
             startsAtLabel: formatAppointmentDateTimeLabel(new Date(appt.starts_at)),
+            cancellationNote: cancellationNote?.trim() || undefined,
           });
         } catch (e) {
           // eslint-disable-next-line no-console
@@ -239,7 +246,7 @@ router.post('/appointments', async (req, res) => {
         insert into appointments (
           barber_id, service_id, customer_id, starts_at, ends_at, status, notes
         )
-        values ($1, $2, $3, $4, $5, 'pending', $6)
+        values ($1, $2, $3, $4, $5, 'confirmed', $6)
         returning id, barber_id, service_id, customer_id, starts_at, ends_at, status, notes, created_at
       `,
       [
@@ -275,6 +282,9 @@ router.put('/admin/shop-settings', requireAdmin, async (req, res) => {
   const s = await updateShopSettings({
     bookingMinLeadHours: parsed.data.bookingMinLeadHours,
     bookingMaxDaysAhead: parsed.data.bookingMaxDaysAhead,
+    contactWhatsapp: parsed.data.contactWhatsapp,
+    contactEmail: parsed.data.contactEmail,
+    contactAddress: parsed.data.contactAddress,
   });
   res.json(s);
 });
@@ -359,10 +369,26 @@ router.post('/admin/blocked-ranges', requireAdmin, async (req, res) => {
   if (!parsed.success)
     return res.status(400).json({ error: formatZodError(parsed.error) });
 
-  const startsAt = new Date(parsed.data.startsAt);
-  const endsAt = new Date(parsed.data.endsAt);
-  if (!(endsAt > startsAt)) {
-    return res.status(400).json({ error: 'endsAt debe ser posterior a startsAt' });
+  let startsAt: Date;
+  let endsAt: Date;
+  let note: string | undefined;
+
+  if ('blockedDate' in parsed.data) {
+    try {
+      const r = blockedRangeForShopCalendarDay(parsed.data.blockedDate);
+      startsAt = r.startsAt;
+      endsAt = r.endsAt;
+      note = parsed.data.note;
+    } catch {
+      return res.status(400).json({ error: 'fecha inválida' });
+    }
+  } else {
+    startsAt = new Date(parsed.data.startsAt);
+    endsAt = new Date(parsed.data.endsAt);
+    note = parsed.data.note;
+    if (!(endsAt > startsAt)) {
+      return res.status(400).json({ error: 'endsAt debe ser posterior a startsAt' });
+    }
   }
 
   const barberId = await getSingleActiveBarberId();
@@ -381,7 +407,7 @@ router.post('/admin/blocked-ranges', requireAdmin, async (req, res) => {
   const row = await insertBlockedRange({
     startsAt,
     endsAt,
-    note: parsed.data.note,
+    note,
   });
   res.status(201).json(row);
 });
