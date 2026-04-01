@@ -73,7 +73,7 @@ Postgres 16 corriendo en Docker con:
   - `shop_settings` – fila `id = 1`: `booking_min_lead_hours`, `booking_max_days_ahead` (p. ej. 2 h y 15 días por defecto)
   - `business_hours` – una fila por día (`day_of_week` 0 = lunes … 6 = domingo): cerrado o rango `open_time` / `close_time`
   - `blocked_ranges` – intervalos donde no se ofrecen turnos (`starts_at`, `ends_at`, nota opcional); no se puede insertar un bloqueo si ya hay turnos activos solapados
-  - `customers` – clientes (name, phone único, email opcional)
+  - `customers` – clientes (name, phone único, email obligatorio en la reserva web; en la base puede ser null en filas antiguas)
   - `appointments` – turnos, con:
     - `barber_id`, `service_id`, `customer_id`
     - `starts_at`, `ends_at`
@@ -93,7 +93,7 @@ Basadas en `server/.env.example`:
 - `PORT=3001`
 - `CLIENT_ORIGIN=http://localhost:5173`
 - `TIMEZONE=America/Argentina/Buenos_Aires`
-- `WHATSAPP_NUMBER` — opcional; número de WhatsApp del negocio **solo dígitos** (código país, sin `+`). Si está definido, la reserva pública puede mostrar un enlace a `wa.me` con mensaje prellenado tras confirmar el turno.
+- `WHATSAPP_NUMBER` — opcional; número de WhatsApp del negocio **solo dígitos** (código país, sin `+`). **Respaldo:** si en el panel (Reglas) no cargaste WhatsApp en `shop_settings`, la API usa este valor para `GET /api/public-settings` y el enlace en la confirmación de reserva.
 - **SMTP / recordatorios** — opcional; `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM`, `REMINDER_HOURS_BEFORE` (default 24), `REMINDER_POLL_MINUTES` (default 15). Detalle en la subsección **Recordatorios por email**.
 - `JWT_SECRET` — mínimo 16 caracteres; firma el JWT del panel admin.
 - **Autenticación del admin (elegí una opción, no ambas):**
@@ -128,7 +128,9 @@ Todos los endpoints de negocio están colgados bajo `/api`.
     - Lista de servicios **activos** (`id`, `name`, `duration_minutes`, `price_cents`).
   - `GET /api/public-settings`  
     - Sin autenticación. Devuelve, entre otros:
-      - `whatsappNumber`: `string | null` (según `WHATSAPP_NUMBER`)
+      - `whatsappNumber`: `string | null` — primero el WhatsApp guardado en `shop_settings` (panel Reglas); si no hay, `WHATSAPP_NUMBER` del entorno.
+      - `contactEmail`: `string | null` — email de contacto del local desde `shop_settings` (opcional).
+      - `contactAddress`: `string | null` — dirección física del local (opcional); en la reserva se muestra con enlace a Google Maps.
       - `barberId`: uuid del barbero activo o `null` si ninguno
       - `timezone`: valor de `TIMEZONE`
       - `bookingMinLeadHours`, `bookingMaxDaysAhead`: reglas desde `shop_settings`
@@ -153,7 +155,7 @@ Todos los endpoints de negocio están colgados bajo `/api`.
     - Cada fila incluye `service_name`, datos de cliente y **no** expone nombre de barbero.
   - `POST /api/appointments`  
     - Crea un turno para el **barbero activo** (el cliente no envía `barberId`).
-    - Body: `serviceId`, `startsAt` (ISO), `customer` (`name`, `phone`, `email` opcional), `notes` opcional.
+    - Body: `serviceId`, `startsAt` (ISO), `customer` (`name`, `phone`, `email` obligatorio para notificaciones), `notes` opcional.
     - Valida reglas de agenda (anticipación, rango de días, horario, bloqueos, alineación de slot).
     - **503** si no hay barbero activo; **409** si el horario se solapa con otro turno.
   - `PATCH /api/appointments/:id/status`  
@@ -162,7 +164,7 @@ Todos los endpoints de negocio están colgados bajo `/api`.
     - Si pasa a `cancelled` y el cliente tiene email configurado, se intenta enviar correo de cancelación (SMTP).
 
 - **Configuración del negocio (admin, JWT)**
-  - `GET /api/admin/shop-settings` / `PUT /api/admin/shop-settings` — `bookingMinLeadHours`, `bookingMaxDaysAhead`.
+  - `GET /api/admin/shop-settings` / `PUT /api/admin/shop-settings` — `bookingMinLeadHours`, `bookingMaxDaysAhead`, `contactWhatsapp`, `contactEmail`, `contactAddress` (opcionales; vacío borra el valor en BD).
   - `GET /api/admin/business-hours` / `PUT /api/admin/business-hours` — arreglo de 7 días (`dayOfWeek` 0–6, `isClosed`, `openTime`/`closeTime` en `HH:MM` o `null` si cerrado).
   - `GET /api/admin/services` — todos los servicios (incluye inactivos); `POST /api/admin/services` crear; `PATCH /api/admin/services/:id` actualizar (nombre, duración, precio, `active`).
   - `GET /api/admin/blocked-ranges`; `POST /api/admin/blocked-ranges` (`startsAt`, `endsAt`, `note` opcional) — **409** si hay turnos activos en ese rango; `DELETE /api/admin/blocked-ranges/:id`.
@@ -263,7 +265,7 @@ Si preferís un ciclo de desarrollo más rápido mientras editás código:
 - **CORS:** `CLIENT_ORIGIN` en la API debe coincidir **exactamente** con la URL del navegador (esquema `https`, host y puerto si no es 443/80). Si el front y el API están en distintos orígenes, el cliente ya usa `VITE_API_BASE` apuntando al prefijo `/api` público.
 - **Build del frontend:** Vite inyecta variables en **tiempo de build**. Definí `VITE_API_BASE` (p. ej. `https://api.tudominio.com/api`) al ejecutar `npm run build` en `client/` o vía `docker build`/`ARG` según tu pipeline.
 - **Secretos:** `JWT_SECRET` largo y aleatorio; admin con `ADMIN_PASSWORD_BCRYPT` (no texto plano); `DATABASE_URL` apuntando a Postgres gestionado con TLS si el proveedor lo exige.
-- **WhatsApp:** `WHATSAPP_NUMBER` con el número real del negocio (formato internacional sin `+`).
+- **WhatsApp:** podés cargar el número en **Panel → Reglas → Contacto del local** (persistido en BD); si no, definí `WHATSAPP_NUMBER` como respaldo (mismo formato: solo dígitos, código país).
 - **Recordatorios por email:** SMTP de producción y `MAIL_FROM`; ver límites del proveedor.
 
 ### Tests E2E (Playwright)

@@ -8,37 +8,64 @@ export const SLOT_STEP_MINUTES = 15;
 export type ShopSettingsRow = {
   bookingMinLeadHours: number;
   bookingMaxDaysAhead: number;
+  contactWhatsapp: string | null;
+  contactEmail: string | null;
+  contactAddress: string | null;
 };
 
 export async function getShopSettings(): Promise<ShopSettingsRow> {
   const r = await pool.query<{
     booking_min_lead_hours: number;
     booking_max_days_ahead: number;
-  }>(`select booking_min_lead_hours, booking_max_days_ahead from shop_settings where id = 1`);
+    contact_whatsapp: string | null;
+    contact_email: string | null;
+    contact_address: string | null;
+  }>(
+    `select booking_min_lead_hours, booking_max_days_ahead, contact_whatsapp, contact_email, contact_address from shop_settings where id = 1`,
+  );
   const row = r.rows[0];
   if (!row) throw new Error('shop_settings inexistente');
   return {
     bookingMinLeadHours: row.booking_min_lead_hours,
     bookingMaxDaysAhead: row.booking_max_days_ahead,
+    contactWhatsapp: row.contact_whatsapp,
+    contactEmail: row.contact_email,
+    contactAddress: row.contact_address,
   };
 }
 
 export async function updateShopSettings(data: {
   bookingMinLeadHours: number;
   bookingMaxDaysAhead: number;
+  contactWhatsapp?: string | null;
+  contactEmail?: string | null;
+  contactAddress?: string | null;
 }): Promise<ShopSettingsRow> {
+  const current = await getShopSettings();
+  const contactWhatsapp =
+    data.contactWhatsapp !== undefined ? data.contactWhatsapp : current.contactWhatsapp;
+  const contactEmail = data.contactEmail !== undefined ? data.contactEmail : current.contactEmail;
+  const contactAddress =
+    data.contactAddress !== undefined ? data.contactAddress : current.contactAddress;
+
   const r = await pool.query<{
     booking_min_lead_hours: number;
     booking_max_days_ahead: number;
+    contact_whatsapp: string | null;
+    contact_email: string | null;
+    contact_address: string | null;
   }>(
-    `update shop_settings set booking_min_lead_hours = $1, booking_max_days_ahead = $2 where id = 1
-     returning booking_min_lead_hours, booking_max_days_ahead`,
-    [data.bookingMinLeadHours, data.bookingMaxDaysAhead],
+    `update shop_settings set booking_min_lead_hours = $1, booking_max_days_ahead = $2, contact_whatsapp = $3, contact_email = $4, contact_address = $5 where id = 1
+     returning booking_min_lead_hours, booking_max_days_ahead, contact_whatsapp, contact_email, contact_address`,
+    [data.bookingMinLeadHours, data.bookingMaxDaysAhead, contactWhatsapp, contactEmail, contactAddress],
   );
   const row = r.rows[0]!;
   return {
     bookingMinLeadHours: row.booking_min_lead_hours,
     bookingMaxDaysAhead: row.booking_max_days_ahead,
+    contactWhatsapp: row.contact_whatsapp,
+    contactEmail: row.contact_email,
+    contactAddress: row.contact_address,
   };
 }
 
@@ -82,6 +109,20 @@ export async function getOpenCloseForDate(
   });
   if (close <= open) return null;
   return { open, close };
+}
+
+/** Inicio (inclusivo) y fin (exclusivo) del día calendario en la zona del negocio. */
+export function blockedRangeForShopCalendarDay(dateYmd: string): {
+  startsAt: Date;
+  endsAt: Date;
+} {
+  const zone = env.TIMEZONE;
+  const start = DateTime.fromISO(dateYmd, { zone }).startOf('day');
+  if (!start.isValid) {
+    throw new Error('fecha inválida');
+  }
+  const end = start.plus({ days: 1 });
+  return { startsAt: start.toJSDate(), endsAt: end.toJSDate() };
 }
 
 export function isWithinMaxDaysAhead(dateStr: string, maxDays: number): boolean {
