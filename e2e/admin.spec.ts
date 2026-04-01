@@ -36,7 +36,7 @@ test.describe('Panel admin', () => {
     expect(Array.isArray(rows)).toBe(true);
 
     await expect(
-      page.getByRole('heading', { name: 'Panel de turnos' }),
+      page.getByRole('heading', { name: 'Panel de administración' }),
     ).toBeVisible({ timeout: 20_000 });
 
     await expect(

@@ -77,11 +77,12 @@ Postgres 16 corriendo en Docker con:
   - `appointments` – turnos, con:
     - `barber_id`, `service_id`, `customer_id`
     - `starts_at`, `ends_at`
-    - `status` (`pending | confirmed | cancelled`)
+    - `status` (`confirmed | cancelled`)
+    - `attended` (boolean nullable; asistencia marcada desde el panel)
     - `notes`, `created_at`
     - `reminder_email_sent_at` (opcional; cuándo se envió el recordatorio por email)
 - **Tipos**
-  - `appointment_status` (`pending`, `confirmed`, `cancelled`)
+  - `appointment_status` (`confirmed`, `cancelled`) — migración `008` convierte históricos `pending` a `confirmed` y elimina el valor `pending`
 
 La migración inicial está en `server/migrations/001_init.js` y ya fue aplicada una vez sobre la base `barber_turnos`.
 
@@ -108,7 +109,7 @@ Si configurás **SMTP**, el servidor envía **un correo por turno** cuando falta
 
 - El contenido del recordatorio **no incluye nombre de barbero** (solo cliente, servicio y fecha/hora).
 - **Requisito:** el cliente debe tener **email** en la reserva; si no cargó email, no hay recordatorio.
-- **Turnos:** solo `pending` o `confirmed` (no `cancelled`).
+- **Turnos:** solo `confirmed` (no `cancelled`; los cancelados no reciben recordatorio).
 - **Cancelación desde el panel:** si el admin pasa un turno a `cancelled` y el cliente tenía email, se intenta enviar un correo de cancelación (mismo SMTP).
 - **Variables:** `SMTP_HOST`, `SMTP_PORT` (default 587), `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM` (remitente). Si falta SMTP, la API arranca igual y en consola verás que los recordatorios están deshabilitados.
 - **Coste:** el envío no es “gratis ilimitado”; los proveedores (Brevo, Resend, Gmail con contraseña de aplicación, etc.) suelen tener **capas gratuitas con límites**; revisá su documentación.
@@ -128,6 +129,7 @@ Todos los endpoints de negocio están colgados bajo `/api`.
     - Lista de servicios **activos** (`id`, `name`, `duration_minutes`, `price_cents`).
   - `GET /api/public-settings`  
     - Sin autenticación. Devuelve, entre otros:
+      - `shopName`: `string | null` — nombre del local (panel Reglas); la reserva y el menú lo usan como título.
       - `whatsappNumber`: `string | null` — primero el WhatsApp guardado en `shop_settings` (panel Reglas); si no hay, `WHATSAPP_NUMBER` del entorno.
       - `contactEmail`: `string | null` — email de contacto del local desde `shop_settings` (opcional).
       - `contactAddress`: `string | null` — dirección física del local (opcional); en la reserva se muestra con enlace a Google Maps.
@@ -147,24 +149,31 @@ Todos los endpoints de negocio están colgados bajo `/api`.
     - Body: `{ "password": "<contraseña en texto plano>" }` (la misma que configuraste como `ADMIN_PASSWORD` o la que usaste para generar `ADMIN_PASSWORD_BCRYPT`).  
     - Respuesta OK: `{ "token": "<jwt>", "expiresInSec": 604800 }` (7 días).  
     - El cliente guarda el token en `sessionStorage` y lo envía como `Authorization: Bearer <token>` en las rutas protegidas.
+    - Límite de intentos por IP (rate limit) para reducir fuerza bruta.
 
 - **Turnos**
   - `GET /api/appointments?from=<ISO>&to=<ISO>&barberId=<uuid opcional>`  
     - **Requiere** cabecera `Authorization: Bearer <jwt>`.  
     - Lista turnos que intersectan el rango; `barberId` opcional para filtrar.
-    - Cada fila incluye `service_name`, datos de cliente y **no** expone nombre de barbero.
+    - Cada fila incluye `service_name`, datos de cliente, `attended` (asistencia, `null`/`true`/`false`) y **no** expone nombre de barbero.
   - `POST /api/appointments`  
     - Crea un turno para el **barbero activo** (el cliente no envía `barberId`).
     - Body: `serviceId`, `startsAt` (ISO), `customer` (`name`, `phone`, `email` obligatorio para notificaciones), `notes` opcional.
     - Valida reglas de agenda (anticipación, rango de días, horario, bloqueos, alineación de slot).
     - **503** si no hay barbero activo; **409** si el horario se solapa con otro turno.
+    - Límite de frecuencia por IP (rate limit).
+    - Si hay **SMTP** configurado, envía correo de confirmación con enlace para cancelar (`/cancelar?token=…`).
+  - `POST /api/appointments/cancel-by-token`  
+    - Público (sin JWT). Body: `{ "token": "<jwt del enlace de cancelación>" }`. Cancela el turno si sigue `confirmed` y aún no comenzó. Límite por IP.
   - `PATCH /api/appointments/:id/status`  
     - **Requiere** `Authorization: Bearer <jwt>`.  
-    - Body: `{ "status": "pending" | "confirmed" | "cancelled" }`.  
+    - Body: `{ "status": "confirmed" | "cancelled" }`.  
     - Si pasa a `cancelled` y el cliente tiene email configurado, se intenta enviar correo de cancelación (SMTP).
+  - `PATCH /api/appointments/:id/attendance`  
+    - **Requiere** JWT. Body: `{ "attended": true | false | null }` — marca si el cliente asistió (solo tiene sentido operativo para turnos ya pasados; el panel lo habilita ahí).
 
 - **Configuración del negocio (admin, JWT)**
-  - `GET /api/admin/shop-settings` / `PUT /api/admin/shop-settings` — `bookingMinLeadHours`, `bookingMaxDaysAhead`, `contactWhatsapp`, `contactEmail`, `contactAddress` (opcionales; vacío borra el valor en BD).
+  - `GET /api/admin/shop-settings` / `PUT /api/admin/shop-settings` — `bookingMinLeadHours`, `bookingMaxDaysAhead`, `shopName`, `contactWhatsapp`, `contactEmail`, `contactAddress` (opcionales; vacío borra el valor en BD).
   - `GET /api/admin/business-hours` / `PUT /api/admin/business-hours` — arreglo de 7 días (`dayOfWeek` 0–6, `isClosed`, `openTime`/`closeTime` en `HH:MM` o `null` si cerrado).
   - `GET /api/admin/services` — todos los servicios (incluye inactivos); `POST /api/admin/services` crear; `PATCH /api/admin/services/:id` actualizar (nombre, duración, precio, `active`).
   - `GET /api/admin/blocked-ranges`; `POST /api/admin/blocked-ranges` (`startsAt`, `endsAt`, `note` opcional) — **409** si hay turnos activos en ese rango; `DELETE /api/admin/blocked-ranges/:id`.

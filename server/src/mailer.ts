@@ -19,6 +19,8 @@ export type ReminderPayload = {
   customerName: string;
   serviceName: string;
   startsAtLabel: string;
+  /** Enlace para cancelar sin iniciar sesión (mismo token que en la confirmación). */
+  cancelUrl?: string;
 };
 
 export async function sendAppointmentReminderEmail(
@@ -26,13 +28,25 @@ export async function sendAppointmentReminderEmail(
   p: ReminderPayload,
 ): Promise<void> {
   const subject = `Recordatorio: turno el ${p.startsAtLabel}`;
+  const cancelBlock = p.cancelUrl?.trim()
+    ? [
+        '',
+        'Para cancelar este turno (sin iniciar sesión):',
+        p.cancelUrl.trim(),
+      ]
+    : [];
+  const cancelHtml = p.cancelUrl?.trim()
+    ? `<p style="margin-top:12px"><a href="${escapeHtml(p.cancelUrl.trim())}">Cancelar turno</a></p>`
+    : '';
+
   const text = [
     `Hola ${p.customerName},`,
     '',
     `Te recordamos tu turno el ${p.startsAtLabel}.`,
     `Servicio: ${p.serviceName}`,
+    ...cancelBlock,
     '',
-    'Si necesitás cambiar o cancelar, respondé a este correo o contactá al local.',
+    'Si necesitás cambiar el horario, contactá al local.',
   ].join('\n');
 
   const html = `
@@ -41,7 +55,8 @@ export async function sendAppointmentReminderEmail(
     <ul>
       <li>Servicio: ${escapeHtml(p.serviceName)}</li>
     </ul>
-    <p style="color:#666;font-size:12px">Si necesitás cambiar o cancelar, contactá al local.</p>
+    ${cancelHtml}
+    <p style="color:#666;font-size:12px">Si necesitás otro cambio, contactá al local.</p>
   `.trim();
 
   await transporter.sendMail({
@@ -112,4 +127,40 @@ function escapeHtml(s: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+export async function sendBookingConfirmationEmail(
+  transporter: nodemailer.Transporter,
+  p: {
+    to: string;
+    customerName: string;
+    serviceName: string;
+    startsAtLabel: string;
+    cancelUrl: string;
+  },
+): Promise<void> {
+  const subject = `Turno confirmado — ${p.startsAtLabel}`;
+  const text = [
+    `Hola ${p.customerName},`,
+    '',
+    `Tu turno quedó confirmado: ${p.serviceName}, ${p.startsAtLabel}.`,
+    '',
+    'Para cancelar cuando quieras (sin iniciar sesión):',
+    p.cancelUrl,
+    '',
+    'Si no pediste este turno, ignorá este mensaje o contactá al local.',
+  ].join('\n');
+  const html = `
+    <p>Hola ${escapeHtml(p.customerName)},</p>
+    <p>Tu turno quedó <strong>confirmado</strong>: ${escapeHtml(p.serviceName)}, ${escapeHtml(p.startsAtLabel)}.</p>
+    <p style="margin-top:12px"><a href="${escapeHtml(p.cancelUrl)}">Cancelar turno</a></p>
+    <p style="color:#666;font-size:12px">Si no pediste este turno, ignorá este mensaje.</p>
+  `.trim();
+  await transporter.sendMail({
+    from: env.MAIL_FROM!,
+    to: p.to,
+    subject,
+    text,
+    html,
+  });
 }

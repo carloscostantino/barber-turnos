@@ -59,7 +59,7 @@ export const ListAppointmentsQuery = z.object({
 
 export const UpdateAppointmentStatusBody = z
   .object({
-    status: z.enum(['pending', 'confirmed', 'cancelled']),
+    status: z.enum(['confirmed', 'cancelled']),
     cancellationNote: z.preprocess(
       (v) =>
         v === null || v === undefined || (typeof v === 'string' && v.trim() === '')
@@ -77,6 +77,14 @@ export const UpdateAppointmentStatusBody = z
       });
     }
   });
+
+export const CancelAppointmentByTokenBody = z.object({
+  token: z.string().min(1),
+});
+
+export const UpdateAppointmentAttendanceBody = z.object({
+  attended: z.boolean().nullable(),
+});
 
 export const AdminLoginBody = z.object({
   password: z.string().min(1),
@@ -122,9 +130,20 @@ const shopContactAddress = z.preprocess(
   z.union([z.null(), z.string().max(500)]).optional(),
 );
 
+const shopNameField = z.preprocess(
+  (v) => {
+    if (v === undefined) return undefined;
+    if (v === null) return null;
+    const t = String(v).trim();
+    return t === '' ? null : t;
+  },
+  z.union([z.null(), z.string().min(1).max(120)]).optional(),
+);
+
 export const ShopSettingsBody = z.object({
   bookingMinLeadHours: z.coerce.number().int().min(0).max(168),
   bookingMaxDaysAhead: z.coerce.number().int().min(1).max(365),
+  shopName: shopNameField,
   contactWhatsapp: shopContactWhatsapp,
   contactEmail: shopContactEmail,
   contactAddress: shopContactAddress,
@@ -150,6 +169,8 @@ export const ServiceUpdateBody = z.object({
   duration_minutes: z.coerce.number().int().min(5).max(480).optional(),
   price_cents: z.coerce.number().int().min(0).optional(),
   active: z.boolean().optional(),
+  /** Solo uno puede ser favorito (reserva pública). */
+  is_favorite: z.boolean().optional(),
 });
 
 const blockedRangeNote = z.preprocess(

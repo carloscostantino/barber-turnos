@@ -1,13 +1,33 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { API_BASE } from '../config'
+import { BookingDateCalendar } from '../components/BookingDateCalendar'
 import { mapsSearchUrlFromAddress, whatsappHrefFromPhone } from '../lib/contact'
-import { formatDate, formatTime, toInputDate } from '../lib/format'
+import { buildEligibleBookingDates } from '../lib/bookingEligibleDates'
+import {
+  formatDate,
+  formatPesosArFromCents,
+  formatTime,
+  toInputDate,
+} from '../lib/format'
 
 type Service = {
   id: string
   name: string
   duration_minutes: number
   price_cents: number
+  is_favorite?: boolean
+}
+
+function serviceSummaryLine(s: Service) {
+  const pesos = formatPesosArFromCents(s.price_cents)
+  return `${s.name} (${Math.round(s.duration_minutes)} min · $${pesos})`
 }
 
 type Slot = {
@@ -25,9 +45,13 @@ type AppointmentCreated = {
 type PublicSettings = {
   bookingMinLeadHours: number
   bookingMaxDaysAhead: number
+  shopName?: string | null
   whatsappNumber?: string | null
   contactEmail?: string | null
   contactAddress?: string | null
+  timezone?: string
+  businessHours?: { dayOfWeek: number; isClosed: boolean }[]
+  fullyBlockedDates?: string[]
 }
 
 /** Errores del servidor que indican que el slot ya no sirve; conviene refrescar la lista. */
@@ -57,35 +81,55 @@ function hasLocalPublicInfo(s: PublicSettings) {
   return !!(addr || wa || mail)
 }
 
+const footerLabelClass =
+  'text-xs font-medium uppercase tracking-wide text-slate-500'
+
+const footerLinkClass =
+  'text-emerald-400/95 hover:text-emerald-300 font-medium transition-colors'
+
 function BookingContactFooter({ settings }: { settings: PublicSettings }) {
   const addr = settings.contactAddress?.trim()
   const mapUrl = mapsSearchUrlFromAddress(addr ?? null)
   const waHref = whatsappHrefFromPhone(settings.whatsappNumber ?? null)
   const mail = settings.contactEmail?.trim()
 
+  const hasAddress = Boolean(addr)
+  const hasContact = Boolean(waHref || mail)
+  const twoCols = hasAddress && hasContact
+
   return (
     <footer
       className="mt-auto pt-10 border-t border-slate-800/90"
       aria-label="Contacto del local"
     >
-      <p className="text-xs font-medium uppercase tracking-wide text-slate-500 mb-4">
-        Contacto del local
-      </p>
-      <ul className="space-y-3 text-sm text-slate-400">
-        {addr ? (
-          <li className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-x-4">
-            <div>
-              <span className="text-slate-600 text-xs uppercase tracking-wide">
-                Dirección
-              </span>
-              <p className="text-slate-300 whitespace-pre-wrap mt-0.5">{addr}</p>
-            </div>
+      <h2 className={`${footerLabelClass} mb-6`}>Contacto del local</h2>
+
+      <div
+        className={
+          twoCols
+            ? 'grid grid-cols-1 gap-8 md:grid-cols-2 md:gap-10 md:items-start'
+            : 'flex flex-col gap-6'
+        }
+      >
+        {hasAddress ? (
+          <section
+            className={
+              twoCols ? 'md:border-r md:border-slate-800 md:pr-8' : undefined
+            }
+            aria-labelledby="footer-address-heading"
+          >
+            <h3 id="footer-address-heading" className={`${footerLabelClass} mb-2`}>
+              Dirección
+            </h3>
+            <p className="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed">
+              {addr}
+            </p>
             {mapUrl ? (
               <a
                 href={mapUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-slate-600/80 bg-slate-900/80 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800 hover:border-slate-500 transition-colors"
+                className="mt-3 inline-flex w-fit items-center gap-2 rounded-lg border border-slate-600/80 bg-slate-900/80 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800 hover:border-slate-500 transition-colors"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -106,48 +150,54 @@ function BookingContactFooter({ settings }: { settings: PublicSettings }) {
                 Ver ubicación
               </a>
             ) : null}
-          </li>
+          </section>
         ) : null}
-        {waHref ? (
-          <li>
-            <span className="text-slate-600 text-xs uppercase tracking-wide block mb-1">
-              WhatsApp
-            </span>
-            <a
-              href={waHref}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 text-emerald-500/90 hover:text-emerald-400 font-medium"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width={17}
-                height={17}
-                viewBox="0 0 24 24"
-                fill="currentColor"
-                className="shrink-0 opacity-90"
-                aria-hidden
-              >
-                <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.435 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
-              </svg>
-              Escribinos por WhatsApp
-            </a>
-          </li>
+
+        {hasContact ? (
+          <section
+            className={twoCols ? 'md:pl-0' : undefined}
+            aria-label="WhatsApp y correo"
+          >
+            <div className="space-y-4 text-sm">
+              {waHref ? (
+                <div>
+                  <p className={`${footerLabelClass} mb-1`}>WhatsApp</p>
+                  <a
+                    href={waHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`inline-flex items-center gap-2 ${footerLinkClass}`}
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width={17}
+                      height={17}
+                      viewBox="0 0 24 24"
+                      fill="currentColor"
+                      className="shrink-0 opacity-90"
+                      aria-hidden
+                    >
+                      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.435 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+                    </svg>
+                    Escribinos por WhatsApp
+                  </a>
+                </div>
+              ) : null}
+              {mail ? (
+                <div>
+                  <p className={`${footerLabelClass} mb-1`}>Email</p>
+                  <a
+                    href={`mailto:${encodeURIComponent(mail)}`}
+                    className={`${footerLinkClass} break-all`}
+                  >
+                    {mail}
+                  </a>
+                </div>
+              ) : null}
+            </div>
+          </section>
         ) : null}
-        {mail ? (
-          <li>
-            <span className="text-slate-600 text-xs uppercase tracking-wide block mb-1">
-              Email
-            </span>
-            <a
-              href={`mailto:${encodeURIComponent(mail)}`}
-              className="text-emerald-500/90 hover:text-emerald-400 font-medium break-all"
-            >
-              {mail}
-            </a>
-          </li>
-        ) : null}
-      </ul>
+      </div>
     </footer>
   )
 }
@@ -159,7 +209,7 @@ export default function BookingPage() {
   )
 
   const [selectedServiceId, setSelectedServiceId] = useState<string | ''>('')
-  const [date, setDate] = useState(() => toInputDate(new Date()))
+  const [date, setDate] = useState<string>('')
 
   const [slots, setSlots] = useState<Slot[]>([])
   const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null)
@@ -194,11 +244,25 @@ export default function BookingPage() {
     }
   }, [publicSettings])
 
+  const shopTz =
+    publicSettings?.timezone ?? 'America/Argentina/Buenos_Aires'
+
+  const eligibleDates = useMemo(() => {
+    if (!publicSettings) return []
+    return buildEligibleBookingDates({
+      minYmd: minDateStr,
+      maxYmd: maxDateStr,
+      shopTimezone: shopTz,
+      businessHours: publicSettings.businessHours ?? [],
+      fullyBlockedDates: publicSettings.fullyBlockedDates ?? [],
+    })
+  }, [publicSettings, minDateStr, maxDateStr, shopTz])
+
   /** Evita aplicar resultados de una petición anterior si el usuario cambió servicio/fecha rápido. */
   const slotsRequestIdRef = useRef(0)
 
   const loadSlots = useCallback(async () => {
-    if (!selectedServiceId || !date) return
+    if (!selectedServiceId || !date.trim()) return
     const requestId = ++slotsRequestIdRef.current
     try {
       setError(null)
@@ -237,7 +301,7 @@ export default function BookingPage() {
 
   /** Carga inicial y al cambiar servicio, fecha o reglas públicas (min/max). */
   useEffect(() => {
-    if (!publicSettings || !selectedServiceId) return
+    if (!publicSettings || !selectedServiceId || !date.trim()) return
     setSlots([])
     setSlotsFetched(false)
     setSelectedSlot(null)
@@ -260,7 +324,10 @@ export default function BookingPage() {
         const sData = (await sRes.json()) as Service[]
         setServices(sData)
 
-        if (sData.length > 0) setSelectedServiceId(sData[0].id)
+        if (sData.length > 0) {
+          const fav = sData.find((s) => s.is_favorite)
+          setSelectedServiceId(fav?.id ?? sData[0].id)
+        }
 
         if (cfgRes.ok) {
           const cfg = (await cfgRes.json()) as PublicSettings
@@ -275,14 +342,25 @@ export default function BookingPage() {
     void fetchInitial()
   }, [])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!publicSettings) return
     setDate((d) => {
-      if (d < minDateStr) return minDateStr
-      if (d > maxDateStr) return maxDateStr
-      return d
+      let next = d
+      if (!next) {
+        return eligibleDates.length === 0 ? '' : eligibleDates[0]!
+      }
+      if (next < minDateStr) next = minDateStr
+      if (next > maxDateStr) next = maxDateStr
+      if (eligibleDates.length === 0) return ''
+      if (!eligibleDates.includes(next)) return eligibleDates[0]!
+      return next
     })
-  }, [publicSettings, minDateStr, maxDateStr])
+  }, [publicSettings, minDateStr, maxDateStr, eligibleDates])
+
+  useEffect(() => {
+    const name = publicSettings?.shopName?.trim()
+    document.title = name ? `${name} · Reservar turno` : 'Reservar turno'
+  }, [publicSettings?.shopName])
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -389,7 +467,7 @@ export default function BookingPage() {
         <div className="w-full max-w-3xl mx-auto py-10 flex flex-col flex-1 min-h-[calc(100vh-3.5rem)]">
         <header className="mb-8">
           <h1 className="text-3xl font-semibold tracking-tight">
-            Turnos Barbería
+            {publicSettings?.shopName?.trim() || 'Turnos Barbería'}
           </h1>
           <p className="text-slate-400 mt-1">
             Reservá tu turno eligiendo servicio, día y horario.
@@ -407,33 +485,37 @@ export default function BookingPage() {
           onSubmit={handleSubmit}
           className="space-y-6 bg-slate-900/60 border border-slate-800 rounded-xl p-6 shadow-lg"
         >
-          <section className="grid md:grid-cols-2 gap-4">
-            <div className="flex flex-col gap-1">
-              <label className="text-sm text-slate-300">Servicio</label>
+          <section className="w-full max-w-xl mx-auto space-y-6">
+            <div className="flex flex-col gap-2">
+              <label className="text-sm font-medium text-slate-300" htmlFor="booking-service">
+                Servicio
+              </label>
               <select
-                className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+                id="booking-service"
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500/50"
                 value={selectedServiceId}
                 onChange={(e) => setSelectedServiceId(e.target.value)}
               >
                 {services.map((s) => (
                   <option key={s.id} value={s.id}>
-                    {s.name} (
-                    {Math.round(s.duration_minutes)} min)
+                    {serviceSummaryLine(s)}
                   </option>
                 ))}
               </select>
             </div>
 
-            <div className="flex flex-col gap-1">
-              <label className="text-sm text-slate-300">Fecha</label>
-              <input
-                type="date"
-                min={minDateStr}
-                max={maxDateStr}
-                className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-              />
+            <div className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-slate-300">Fecha</span>
+              <div className="flex w-full justify-center">
+                <BookingDateCalendar
+                  id="booking-date"
+                  date={date}
+                  onChangeDate={setDate}
+                  eligibleDates={eligibleDates}
+                  minDateStr={minDateStr}
+                  maxDateStr={maxDateStr}
+                />
+              </div>
             </div>
           </section>
 
@@ -520,12 +602,8 @@ export default function BookingPage() {
                 className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
                 value={customerPhone}
                 onChange={(e) => setCustomerPhone(e.target.value)}
-                placeholder="Ej: 11 5555-5555 o +54 9 11 5555-5555"
+                placeholder="Ej: 11 5555-5555"
               />
-              <p className="text-xs text-slate-500">
-                Podés usar espacios, guiones o el prefijo +. Tiene que tener al
-                menos 6 dígitos (los símbolos no cuentan).
-              </p>
             </div>
 
             <div className="flex flex-col gap-1">
@@ -573,6 +651,14 @@ export default function BookingPage() {
                   Te esperamos el {formatDate(success.starts_at)} a las{' '}
                   {formatTime(success.starts_at)}.
                 </p>
+                {(() => {
+                  const svc = services.find((x) => x.id === selectedServiceId)
+                  return svc ? (
+                    <p className="text-emerald-400/95">
+                      {serviceSummaryLine(svc)}
+                    </p>
+                  ) : null
+                })()}
                 <p className="text-emerald-400/90 text-xs flex flex-wrap items-center gap-x-1.5 gap-y-1">
                   {(() => {
                     const waHref = whatsappHrefFromPhone(

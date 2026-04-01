@@ -8,6 +8,7 @@ export const SLOT_STEP_MINUTES = 15;
 export type ShopSettingsRow = {
   bookingMinLeadHours: number;
   bookingMaxDaysAhead: number;
+  shopName: string | null;
   contactWhatsapp: string | null;
   contactEmail: string | null;
   contactAddress: string | null;
@@ -17,17 +18,19 @@ export async function getShopSettings(): Promise<ShopSettingsRow> {
   const r = await pool.query<{
     booking_min_lead_hours: number;
     booking_max_days_ahead: number;
+    shop_name: string | null;
     contact_whatsapp: string | null;
     contact_email: string | null;
     contact_address: string | null;
   }>(
-    `select booking_min_lead_hours, booking_max_days_ahead, contact_whatsapp, contact_email, contact_address from shop_settings where id = 1`,
+    `select booking_min_lead_hours, booking_max_days_ahead, shop_name, contact_whatsapp, contact_email, contact_address from shop_settings where id = 1`,
   );
   const row = r.rows[0];
   if (!row) throw new Error('shop_settings inexistente');
   return {
     bookingMinLeadHours: row.booking_min_lead_hours,
     bookingMaxDaysAhead: row.booking_max_days_ahead,
+    shopName: row.shop_name,
     contactWhatsapp: row.contact_whatsapp,
     contactEmail: row.contact_email,
     contactAddress: row.contact_address,
@@ -37,11 +40,13 @@ export async function getShopSettings(): Promise<ShopSettingsRow> {
 export async function updateShopSettings(data: {
   bookingMinLeadHours: number;
   bookingMaxDaysAhead: number;
+  shopName?: string | null;
   contactWhatsapp?: string | null;
   contactEmail?: string | null;
   contactAddress?: string | null;
 }): Promise<ShopSettingsRow> {
   const current = await getShopSettings();
+  const shopName = data.shopName !== undefined ? data.shopName : current.shopName;
   const contactWhatsapp =
     data.contactWhatsapp !== undefined ? data.contactWhatsapp : current.contactWhatsapp;
   const contactEmail = data.contactEmail !== undefined ? data.contactEmail : current.contactEmail;
@@ -51,18 +56,27 @@ export async function updateShopSettings(data: {
   const r = await pool.query<{
     booking_min_lead_hours: number;
     booking_max_days_ahead: number;
+    shop_name: string | null;
     contact_whatsapp: string | null;
     contact_email: string | null;
     contact_address: string | null;
   }>(
-    `update shop_settings set booking_min_lead_hours = $1, booking_max_days_ahead = $2, contact_whatsapp = $3, contact_email = $4, contact_address = $5 where id = 1
-     returning booking_min_lead_hours, booking_max_days_ahead, contact_whatsapp, contact_email, contact_address`,
-    [data.bookingMinLeadHours, data.bookingMaxDaysAhead, contactWhatsapp, contactEmail, contactAddress],
+    `update shop_settings set booking_min_lead_hours = $1, booking_max_days_ahead = $2, shop_name = $3, contact_whatsapp = $4, contact_email = $5, contact_address = $6 where id = 1
+     returning booking_min_lead_hours, booking_max_days_ahead, shop_name, contact_whatsapp, contact_email, contact_address`,
+    [
+      data.bookingMinLeadHours,
+      data.bookingMaxDaysAhead,
+      shopName,
+      contactWhatsapp,
+      contactEmail,
+      contactAddress,
+    ],
   );
   const row = r.rows[0]!;
   return {
     bookingMinLeadHours: row.booking_min_lead_hours,
     bookingMaxDaysAhead: row.booking_max_days_ahead,
+    shopName: row.shop_name,
     contactWhatsapp: row.contact_whatsapp,
     contactEmail: row.contact_email,
     contactAddress: row.contact_address,
@@ -152,6 +166,45 @@ export async function fetchBlockedRangesForWindow(
     [rangeStart, rangeEnd],
   );
   return r.rows;
+}
+
+/** Fechas YYYY-MM-DD (zona del negocio) donde existe un bloqueo que cubre todo el día calendario. */
+export async function listFullyBlockedCalendarDatesInRange(
+  fromYmd: string,
+  toYmd: string,
+): Promise<string[]> {
+  const zone = env.TIMEZONE;
+  const start = DateTime.fromISO(fromYmd, { zone }).startOf('day');
+  const end = DateTime.fromISO(toYmd, { zone }).startOf('day');
+  if (!start.isValid || !end.isValid || start > end) return [];
+
+  const rangeEndExclusive = end.plus({ days: 1 });
+  const r = await pool.query<{ starts_at: Date; ends_at: Date }>(
+    `select starts_at, ends_at from blocked_ranges
+     where starts_at < $1 and ends_at > $2`,
+    [rangeEndExclusive.toJSDate(), start.toJSDate()],
+  );
+  const blocks = r.rows;
+
+  const out: string[] = [];
+  let d = start;
+  while (d <= end) {
+    const ymd = d.toISODate()!;
+    const { startsAt, endsAt } = blockedRangeForShopCalendarDay(ymd);
+    const ds = startsAt.getTime();
+    const de = endsAt.getTime();
+    if (
+      blocks.some(
+        (b) =>
+          new Date(b.starts_at).getTime() <= ds &&
+          new Date(b.ends_at).getTime() >= de,
+      )
+    ) {
+      out.push(ymd);
+    }
+    d = d.plus({ days: 1 });
+  }
+  return out;
 }
 
 export function intervalOverlapsBlocked(

@@ -1,4 +1,5 @@
 import { pool } from './db';
+import { signCustomerCancelToken } from './customerToken';
 import { env, isSmtpConfigured } from './env';
 import { createMailer, sendAppointmentReminderEmail } from './mailer';
 
@@ -68,11 +69,14 @@ export async function runReminderJob(): Promise<void> {
     const rows = await fetchReminderCandidates();
     for (const row of rows) {
       try {
+        const cancelToken = signCustomerCancelToken(row.id);
+        const cancelUrl = `${env.CLIENT_ORIGIN}/cancelar?token=${encodeURIComponent(cancelToken)}`;
         await sendAppointmentReminderEmail(transporter, {
           to: row.customer_email,
           customerName: row.customer_name,
           serviceName: row.service_name,
           startsAtLabel: formatStartsAt(row.starts_at),
+          cancelUrl,
         });
         await markReminderSent(row.id);
       } catch (e) {

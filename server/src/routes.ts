@@ -1,5 +1,7 @@
+import { DateTime } from 'luxon';
 import { Router } from 'express';
 import { requireAdmin, signAdminToken, verifyAdminPassword } from './adminAuth';
+import { signCustomerCancelToken, verifyCustomerCancelToken } from './customerToken';
 import {
   countActiveAppointmentsOverlappingRange,
   deleteBlockedRange,
@@ -12,14 +14,16 @@ import {
   listBarbersPublic,
   listBlockedRanges,
   listServices,
+  updateAppointmentAttendance,
   updateService,
 } from './api';
 import { pool } from './db';
-import { env } from './env';
+import { env, isSmtpConfigured } from './env';
 import {
   createMailer,
   formatAppointmentDateTimeLabel,
   sendAppointmentCancelledEmail,
+  sendBookingConfirmationEmail,
 } from './mailer';
 import {
   assertBookingAllowed,
@@ -27,20 +31,28 @@ import {
   computeAvailableSlots,
   getShopSettings,
   listBusinessHours,
+  listFullyBlockedCalendarDatesInRange,
   replaceBusinessHours,
   updateShopSettings,
 } from './scheduling';
+import {
+  bookingRateLimiter,
+  cancelByTokenRateLimiter,
+  loginRateLimiter,
+} from './rateLimit';
 import {
   AdminLoginBody,
   AvailabilityQuery,
   BlockedRangeCreateBody,
   BusinessHoursPutBody,
+  CancelAppointmentByTokenBody,
   CreateAppointmentBody,
   formatZodError,
   ListAppointmentsQuery,
   ServiceCreateBody,
   ServiceUpdateBody,
   ShopSettingsBody,
+  UpdateAppointmentAttendanceBody,
   UpdateAppointmentStatusBody,
   UUID,
 } from './validation';
@@ -61,7 +73,20 @@ router.get('/public-settings', async (_req, res) => {
   const barberId = await getSingleActiveBarberId();
   const settings = await getShopSettings();
   const whatsappFromDb = settings.contactWhatsapp?.trim();
+  const bhRows = await listBusinessHours();
+  const businessHours = bhRows.map((h) => ({
+    dayOfWeek: h.day_of_week,
+    isClosed: h.is_closed,
+  }));
+  const zone = env.TIMEZONE;
+  const today = DateTime.now().setZone(zone).startOf('day');
+  const lastBookable = today.plus({ days: settings.bookingMaxDaysAhead });
+  const fullyBlockedDates = await listFullyBlockedCalendarDatesInRange(
+    today.toISODate()!,
+    lastBookable.toISODate()!,
+  );
   res.json({
+    shopName: settings.shopName?.trim() || null,
     whatsappNumber: whatsappFromDb || env.WHATSAPP_NUMBER || null,
     contactEmail: settings.contactEmail,
     contactAddress: settings.contactAddress,
@@ -69,10 +94,12 @@ router.get('/public-settings', async (_req, res) => {
     timezone: env.TIMEZONE,
     bookingMinLeadHours: settings.bookingMinLeadHours,
     bookingMaxDaysAhead: settings.bookingMaxDaysAhead,
+    businessHours,
+    fullyBlockedDates,
   });
 });
 
-router.post('/admin/login', async (req, res) => {
+router.post('/admin/login', loginRateLimiter, async (req, res) => {
   const parsed = AdminLoginBody.safeParse(req.body);
   if (!parsed.success)
     return res.status(400).json({ error: formatZodError(parsed.error) });
@@ -151,6 +178,22 @@ router.patch('/appointments/:id/status', requireAdmin, async (req, res) => {
   res.json(row);
 });
 
+router.patch('/appointments/:id/attendance', requireAdmin, async (req, res) => {
+  const idParsed = UUID.safeParse(req.params.id);
+  if (!idParsed.success) return res.status(400).json({ error: 'id inválido' });
+
+  const bodyParsed = UpdateAppointmentAttendanceBody.safeParse(req.body);
+  if (!bodyParsed.success)
+    return res.status(400).json({ error: formatZodError(bodyParsed.error) });
+
+  const row = await updateAppointmentAttendance(
+    idParsed.data,
+    bodyParsed.data.attended,
+  );
+  if (!row) return res.status(404).json({ error: 'turno no encontrado' });
+  res.json(row);
+});
+
 router.get('/availability', async (req, res) => {
   const parsed = AvailabilityQuery.safeParse(req.query);
   if (!parsed.success)
@@ -178,7 +221,7 @@ router.get('/availability', async (req, res) => {
   });
 });
 
-router.post('/appointments', async (req, res) => {
+router.post('/appointments', bookingRateLimiter, async (req, res) => {
   const parsed = CreateAppointmentBody.safeParse(req.body);
   if (!parsed.success)
     return res.status(400).json({ error: formatZodError(parsed.error) });
@@ -260,7 +303,42 @@ router.post('/appointments', async (req, res) => {
     );
 
     await client.query('commit');
-    res.status(201).json(appointmentResult.rows[0]);
+    const created = appointmentResult.rows[0] as {
+      id: string;
+      barber_id: string;
+      service_id: string;
+      customer_id: string;
+      starts_at: Date;
+      ends_at: Date;
+      status: string;
+      notes: string | null;
+      created_at: Date;
+    };
+
+    if (isSmtpConfigured() && parsed.data.customer.email?.trim()) {
+      const transporter = createMailer();
+      if (transporter) {
+        try {
+          const cancelToken = signCustomerCancelToken(created.id);
+          const cancelUrl = `${env.CLIENT_ORIGIN}/cancelar?token=${encodeURIComponent(cancelToken)}`;
+          await sendBookingConfirmationEmail(transporter, {
+            to: parsed.data.customer.email.trim(),
+            customerName: parsed.data.customer.name,
+            serviceName: service.name,
+            startsAtLabel: formatAppointmentDateTimeLabel(startsAt),
+            cancelUrl,
+          });
+        } catch (emailErr) {
+          // eslint-disable-next-line no-console
+          console.error(
+            '[booking confirm email]',
+            emailErr instanceof Error ? emailErr.message : emailErr,
+          );
+        }
+      }
+    }
+
+    res.status(201).json(created);
   } catch (e) {
     await client.query('rollback');
     const msg = e instanceof Error ? e.message : 'error';
@@ -269,6 +347,44 @@ router.post('/appointments', async (req, res) => {
     client.release();
   }
 });
+
+router.post(
+  '/appointments/cancel-by-token',
+  cancelByTokenRateLimiter,
+  async (req, res) => {
+    const parsed = CancelAppointmentByTokenBody.safeParse(req.body);
+    if (!parsed.success)
+      return res.status(400).json({ error: formatZodError(parsed.error) });
+
+    const apptId = verifyCustomerCancelToken(parsed.data.token);
+    if (!apptId)
+      return res.status(400).json({ error: 'enlace inválido o vencido' });
+
+    const prev = await pool.query<{ status: string; starts_at: Date }>(
+      `select status, starts_at from appointments where id = $1`,
+      [apptId],
+    );
+    if (!prev.rows[0])
+      return res.status(404).json({ error: 'turno no encontrado' });
+    if (prev.rows[0].status === 'cancelled') {
+      return res.json({ ok: true, alreadyCancelled: true });
+    }
+    if (prev.rows[0].status !== 'confirmed') {
+      return res.status(400).json({ error: 'no se puede cancelar este turno' });
+    }
+    if (new Date(prev.rows[0].starts_at).getTime() <= Date.now()) {
+      return res
+        .status(400)
+        .json({ error: 'el turno ya comenzó o pasó; contactá al local' });
+    }
+
+    await pool.query(
+      `update appointments set status = 'cancelled' where id = $1`,
+      [apptId],
+    );
+    res.json({ ok: true });
+  },
+);
 
 router.get('/admin/shop-settings', requireAdmin, async (_req, res) => {
   const s = await getShopSettings();
@@ -282,6 +398,7 @@ router.put('/admin/shop-settings', requireAdmin, async (req, res) => {
   const s = await updateShopSettings({
     bookingMinLeadHours: parsed.data.bookingMinLeadHours,
     bookingMaxDaysAhead: parsed.data.bookingMaxDaysAhead,
+    shopName: parsed.data.shopName,
     contactWhatsapp: parsed.data.contactWhatsapp,
     contactEmail: parsed.data.contactEmail,
     contactAddress: parsed.data.contactAddress,

@@ -11,19 +11,13 @@ test.describe('Disponibilidad', () => {
     await page.goto('/');
     await Promise.all([servicesP, settingsP]);
 
-    await expect(
-      page.getByRole('button', { name: 'Actualizar horarios' }),
-    ).toBeEnabled({ timeout: 15_000 });
-
-    const responsePromise = page.waitForResponse(
+    const response = await page.waitForResponse(
       (res) =>
         res.url().includes('/api/availability') &&
         res.request().method() === 'GET' &&
         res.ok(),
+      { timeout: 20_000 },
     );
-
-    await page.getByRole('button', { name: 'Actualizar horarios' }).click();
-    const response = await responsePromise;
 
     expect(response.status()).toBe(200);
     const data = (await response.json()) as { slots: unknown[] };
