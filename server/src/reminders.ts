@@ -36,7 +36,7 @@ async function fetchReminderCandidates(): Promise<ReminderRow[]> {
     where a.reminder_email_sent_at is null
       and c.email is not null
       and trim(c.email) <> ''
-      and a.status in ('pending', 'confirmed')
+      and a.status = 'confirmed'
       and a.starts_at > now()
       and a.starts_at >= now() + interval '1 hour' * $1::double precision - interval '45 minutes'
       and a.starts_at <= now() + interval '1 hour' * $1::double precision + interval '45 minutes'
