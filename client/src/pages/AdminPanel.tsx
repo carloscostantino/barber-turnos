@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { clearAdminToken, getAdminToken } from '../adminToken'
 import { API_BASE } from '../config'
+import { whatsappHrefFromPhone } from '../lib/contact'
 import { dayRangeIso, formatDate, formatTime, toInputDate } from '../lib/format'
 import AdminLogin from './AdminLogin'
 
@@ -53,6 +54,44 @@ function statusClass(s: string) {
   return 'bg-slate-800 text-slate-400 border-slate-600'
 }
 
+function ContactLinks({
+  phone,
+  email,
+}: {
+  phone: string
+  email: string | null
+}) {
+  const wa = whatsappHrefFromPhone(phone)
+  return (
+    <>
+      <div>
+        {wa ? (
+          <a
+            href={wa}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-slate-300 hover:text-emerald-400 underline-offset-2 hover:underline"
+          >
+            {phone}
+          </a>
+        ) : (
+          phone
+        )}
+      </div>
+      {email && (
+        <div className="truncate max-w-[200px]" title={email}>
+          <a
+            href={`mailto:${encodeURIComponent(email)}`}
+            className="text-slate-300 hover:text-emerald-400 underline-offset-2 hover:underline"
+          >
+            {email}
+          </a>
+        </div>
+      )}
+    </>
+  )
+}
+
 export default function AdminPanel() {
   const [token, setToken] = useState<string | null>(() =>
     normalizeStoredToken(getAdminToken()),
@@ -92,6 +131,10 @@ function AdminAuthenticatedPanel({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [updatingId, setUpdatingId] = useState<string | null>(null)
+  const [cancelTarget, setCancelTarget] = useState<AppointmentRow | null>(
+    null,
+  )
+  const [cancelNote, setCancelNote] = useState('')
 
   const authHeader = useMemo(
     () => ({ Authorization: `Bearer ${token}` }),
@@ -169,6 +212,52 @@ function AdminAuthenticatedPanel({
       await loadAppointments()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error al actualizar')
+    } finally {
+      setUpdatingId(null)
+    }
+  }
+
+  const openCancelModal = (id: string) => {
+    const row = rows.find((r) => r.id === id)
+    if (row) {
+      setCancelNote('')
+      setCancelTarget(row)
+    }
+  }
+
+  const submitCancel = async () => {
+    if (!cancelTarget) return
+    const id = cancelTarget.id
+    try {
+      setUpdatingId(id)
+      setError(null)
+      const note = cancelNote.trim()
+      const res = await fetch(`${API_BASE}/appointments/${id}/status`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeader,
+        },
+        body: JSON.stringify({
+          status: 'cancelled' satisfies AppointmentStatus,
+          cancellationNote: note || undefined,
+        }),
+      })
+      if (res.status === 401) {
+        reloadToLogin()
+        return
+      }
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) as {
+          error?: string
+        } | null
+        throw new Error(data?.error ?? 'No se pudo cancelar')
+      }
+      setCancelTarget(null)
+      setCancelNote('')
+      await loadAppointments()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error al cancelar')
     } finally {
       setUpdatingId(null)
     }
@@ -298,15 +387,10 @@ function AdminAuthenticatedPanel({
                           {r.customer_name}
                         </td>
                         <td className="px-4 py-3 text-slate-400 text-xs">
-                          <div>{r.customer_phone}</div>
-                          {r.customer_email && (
-                            <div
-                              className="truncate max-w-[140px]"
-                              title={r.customer_email}
-                            >
-                              {r.customer_email}
-                            </div>
-                          )}
+                          <ContactLinks
+                            phone={r.customer_phone}
+                            email={r.customer_email}
+                          />
                         </td>
                         <td className="px-4 py-3">
                           <span
@@ -320,6 +404,7 @@ function AdminAuthenticatedPanel({
                             status={r.status as AppointmentStatus}
                             busy={updatingId === r.id}
                             onPatch={patchStatus}
+                            onRequestCancel={openCancelModal}
                             id={r.id}
                           />
                         </td>
@@ -355,10 +440,12 @@ function AdminAuthenticatedPanel({
                     <p className="text-sm text-slate-300">
                       {r.service_name} · {r.customer_name}
                     </p>
-                    <p className="text-xs text-slate-500">
-                      {r.customer_phone}
-                      {r.customer_email ? ` · ${r.customer_email}` : ''}
-                    </p>
+                    <div className="text-xs text-slate-500 space-y-1">
+                      <ContactLinks
+                        phone={r.customer_phone}
+                        email={r.customer_email}
+                      />
+                    </div>
                     {r.notes && (
                       <p className="text-xs text-slate-400 italic">
                         Nota: {r.notes}
@@ -368,12 +455,79 @@ function AdminAuthenticatedPanel({
                       status={r.status as AppointmentStatus}
                       busy={updatingId === r.id}
                       onPatch={patchStatus}
+                      onRequestCancel={openCancelModal}
                       id={r.id}
                     />
                   </div>
                 ))}
               </div>
             </div>
+
+            {cancelTarget && (
+              <div
+                className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="cancel-modal-title"
+              >
+                <div className="bg-slate-900 border border-slate-700 rounded-xl max-w-md w-full p-6 space-y-4 shadow-xl text-left">
+                  <h3
+                    id="cancel-modal-title"
+                    className="text-lg font-medium text-slate-100"
+                  >
+                    Cancelar turno
+                  </h3>
+                  <p className="text-sm text-slate-400">
+                    {formatDate(cancelTarget.starts_at)}{' '}
+                    {formatTime(cancelTarget.starts_at)} —{' '}
+                    {cancelTarget.service_name} · {cancelTarget.customer_name}
+                  </p>
+                  <div className="flex flex-col gap-1">
+                    <label
+                      htmlFor="cancel-note"
+                      className="text-sm text-slate-300"
+                    >
+                      Comentario para el cliente (opcional)
+                    </label>
+                    <textarea
+                      id="cancel-note"
+                      rows={3}
+                      className="bg-slate-950 border border-slate-600 rounded px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-violet-500 resize-y min-h-[72px]"
+                      value={cancelNote}
+                      onChange={(e) => setCancelNote(e.target.value)}
+                      placeholder="Ej: el local cierra ese día, te ofrecemos otro horario…"
+                    />
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    Si el cliente tiene email cargado y el servidor tiene correo
+                    configurado, recibirá un aviso de cancelación con este texto.
+                  </p>
+                  <div className="flex flex-wrap justify-end gap-2 pt-2">
+                    <button
+                      type="button"
+                      disabled={updatingId === cancelTarget.id}
+                      onClick={() => {
+                        setCancelTarget(null)
+                        setCancelNote('')
+                      }}
+                      className="text-sm px-4 py-2 rounded border border-slate-600 text-slate-300 hover:bg-slate-800 transition-colors"
+                    >
+                      Volver
+                    </button>
+                    <button
+                      type="button"
+                      disabled={updatingId === cancelTarget.id}
+                      onClick={() => void submitCancel()}
+                      className="text-sm px-4 py-2 rounded bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white transition-colors"
+                    >
+                      {updatingId === cancelTarget.id
+                        ? 'Cancelando…'
+                        : 'Confirmar cancelación'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         )}
 
@@ -397,6 +551,9 @@ function AdminAuthenticatedPanel({
 function ReglasTab({ authHeader }: { authHeader: Record<string, string> }) {
   const [minH, setMinH] = useState(2)
   const [maxD, setMaxD] = useState(15)
+  const [contactWa, setContactWa] = useState('')
+  const [contactEmail, setContactEmail] = useState('')
+  const [contactAddress, setContactAddress] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
@@ -417,9 +574,15 @@ function ReglasTab({ authHeader }: { authHeader: Record<string, string> }) {
         const d = (await res.json()) as {
           bookingMinLeadHours: number
           bookingMaxDaysAhead: number
+          contactWhatsapp: string | null
+          contactEmail: string | null
+          contactAddress: string | null
         }
         setMinH(d.bookingMinLeadHours)
         setMaxD(d.bookingMaxDaysAhead)
+        setContactWa(d.contactWhatsapp ?? '')
+        setContactEmail(d.contactEmail ?? '')
+        setContactAddress(d.contactAddress ?? '')
       } catch (e) {
         setErr(e instanceof Error ? e.message : 'Error')
       } finally {
@@ -439,6 +602,9 @@ function ReglasTab({ authHeader }: { authHeader: Record<string, string> }) {
         body: JSON.stringify({
           bookingMinLeadHours: minH,
           bookingMaxDaysAhead: maxD,
+          contactWhatsapp: contactWa.trim() === '' ? null : contactWa,
+          contactEmail: contactEmail.trim() === '' ? null : contactEmail,
+          contactAddress: contactAddress.trim() === '' ? null : contactAddress,
         }),
       })
       if (res.status === 401) {
@@ -492,6 +658,59 @@ function ReglasTab({ authHeader }: { authHeader: Record<string, string> }) {
           onChange={(e) => setMaxD(Number(e.target.value))}
         />
       </div>
+
+      <div className="border-t border-slate-800 pt-4 mt-2 space-y-3">
+        <h3 className="text-base font-medium text-slate-200">
+          Contacto del local
+        </h3>
+        <p className="text-xs text-slate-500">
+          Se muestran en la página de reserva y en la confirmación. WhatsApp:
+          código de país sin espacios (ej. 54911…).
+        </p>
+        <div className="flex flex-col gap-1">
+          <label className="text-sm text-slate-300">
+            Dirección del local (opcional)
+          </label>
+          <textarea
+            className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm min-h-[72px] resize-y"
+            value={contactAddress}
+            onChange={(e) => setContactAddress(e.target.value)}
+            placeholder="Ej: Av. Corrientes 1234, CABA"
+            maxLength={500}
+            rows={3}
+          />
+          <p className="text-xs text-slate-500">
+            Aparece en la reserva pública con un enlace para abrir el mapa.
+          </p>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-sm text-slate-300">WhatsApp</label>
+          <input
+            type="tel"
+            inputMode="tel"
+            autoComplete="tel"
+            className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
+            value={contactWa}
+            onChange={(e) => setContactWa(e.target.value)}
+            placeholder="54911…"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-sm text-slate-300">
+            Email de contacto (opcional)
+          </label>
+          <input
+            type="email"
+            inputMode="email"
+            autoComplete="email"
+            className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
+            value={contactEmail}
+            onChange={(e) => setContactEmail(e.target.value)}
+            placeholder="local@ejemplo.com"
+          />
+        </div>
+      </div>
+
       {err && (
         <p className="text-sm text-red-400 border border-red-800 rounded px-2 py-1">
           {err}
@@ -773,26 +992,52 @@ function ServiciosTab({ authHeader }: { authHeader: Record<string, string> }) {
       <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-6 space-y-3">
         <h2 className="text-lg font-medium text-slate-100">Nuevo servicio</h2>
         <div className="grid sm:grid-cols-2 gap-3">
-          <input
-            placeholder="Nombre"
-            className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-          <input
-            type="number"
-            min={5}
-            placeholder="Duración (min)"
-            className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
-            value={dur}
-            onChange={(e) => setDur(Number(e.target.value))}
-          />
-          <input
-            placeholder="Precio (pesos)"
-            className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-          />
+          <div className="flex flex-col gap-1 sm:col-span-2">
+            <label
+              htmlFor="new-service-name"
+              className="text-sm text-slate-300"
+            >
+              Nombre
+            </label>
+            <input
+              id="new-service-name"
+              placeholder="Ej: Corte + barba"
+              className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label
+              htmlFor="new-service-duration"
+              className="text-sm text-slate-300"
+            >
+              Duración (minutos)
+            </label>
+            <input
+              id="new-service-duration"
+              type="number"
+              min={5}
+              className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
+              value={dur}
+              onChange={(e) => setDur(Number(e.target.value))}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label
+              htmlFor="new-service-price"
+              className="text-sm text-slate-300"
+            >
+              Precio (pesos)
+            </label>
+            <input
+              id="new-service-price"
+              placeholder="1500"
+              className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+            />
+          </div>
         </div>
         <button
           type="button"
@@ -867,6 +1112,7 @@ function BloqueosTab({ authHeader }: { authHeader: Record<string, string> }) {
   const [end, setEnd] = useState('')
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
+  const [fullDayDate, setFullDayDate] = useState(() => toInputDate(new Date()))
 
   const load = useCallback(async () => {
     const res = await fetch(`${API_BASE}/admin/blocked-ranges`, {
@@ -964,6 +1210,48 @@ function BloqueosTab({ authHeader }: { authHeader: Record<string, string> }) {
     }
   }
 
+  const addFullDay = async () => {
+    if (!fullDayDate) {
+      setErr('Elegí una fecha.')
+      return
+    }
+    try {
+      setSaving(true)
+      setErr(null)
+      const res = await fetch(`${API_BASE}/admin/blocked-ranges`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeader },
+        body: JSON.stringify({
+          blockedDate: fullDayDate,
+          note: note.trim() || undefined,
+        }),
+      })
+      if (res.status === 401) {
+        reloadToLogin()
+        return
+      }
+      if (res.status === 409) {
+        const data = (await res.json().catch(() => null)) as {
+          error?: string
+        } | null
+        throw new Error(
+          data?.error ?? 'Hay turnos en ese rango; no se puede bloquear.',
+        )
+      }
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) as {
+          error?: string
+        } | null
+        throw new Error(data?.error ?? 'No se pudo crear')
+      }
+      await load()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   if (loading) {
     return <p className="text-slate-400 text-sm">Cargando…</p>
   }
@@ -974,6 +1262,38 @@ function BloqueosTab({ authHeader }: { authHeader: Record<string, string> }) {
         <h2 className="text-lg font-medium text-slate-100">Nuevo bloqueo</h2>
         <p className="text-xs text-slate-500">
           No se puede crear si ya hay turnos activos en ese intervalo.
+        </p>
+        <div className="rounded-lg border border-slate-700/80 bg-slate-950/40 p-4 space-y-3">
+          <h3 className="text-sm font-medium text-slate-200">Día completo</h3>
+          <p className="text-xs text-slate-500">
+            Bloquea desde la medianoche hasta el día siguiente según la zona
+            horaria del servidor (configurada en <code className="text-slate-500">TIMEZONE</code>).
+          </p>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-slate-400" htmlFor="block-full-day">
+                Fecha
+              </label>
+              <input
+                id="block-full-day"
+                type="date"
+                className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
+                value={fullDayDate}
+                onChange={(e) => setFullDayDate(e.target.value)}
+              />
+            </div>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void addFullDay()}
+              className="text-sm px-4 py-2 rounded bg-violet-600 hover:bg-violet-500 disabled:opacity-50"
+            >
+              {saving ? 'Guardando…' : 'Bloquear día completo'}
+            </button>
+          </div>
+        </div>
+        <p className="text-xs text-slate-500 pt-1">
+          O definí un rango con hora concreta:
         </p>
         <div className="grid sm:grid-cols-2 gap-3">
           <div className="flex flex-col gap-1">
@@ -1062,11 +1382,13 @@ function ActionButtons({
   status,
   busy,
   onPatch,
+  onRequestCancel,
 }: {
   id: string
   status: AppointmentStatus
   busy: boolean
   onPatch: (id: string, s: AppointmentStatus) => void
+  onRequestCancel: (id: string) => void
 }) {
   const btn =
     'text-xs px-2 py-1 rounded border transition-colors disabled:opacity-50'
@@ -1085,7 +1407,7 @@ function ActionButtons({
           <button
             type="button"
             disabled={busy}
-            onClick={() => void onPatch(id, 'cancelled')}
+            onClick={() => onRequestCancel(id)}
             className={`${btn} border-red-800 bg-red-950/30 text-red-300 hover:bg-red-950/50`}
           >
             Cancelar
@@ -1096,7 +1418,7 @@ function ActionButtons({
         <button
           type="button"
           disabled={busy}
-          onClick={() => void onPatch(id, 'cancelled')}
+          onClick={() => onRequestCancel(id)}
           className={`${btn} border-red-800 bg-red-950/30 text-red-300 hover:bg-red-950/50`}
         >
           Cancelar

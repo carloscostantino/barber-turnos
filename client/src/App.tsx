@@ -16,8 +16,8 @@ const navClass = ({ isActive }: { isActive: boolean }) =>
 
 function Layout() {
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-50">
-      <nav className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-sm sticky top-0 z-10">
+    <div className="min-h-screen bg-slate-950 text-slate-50 flex flex-col">
+      <nav className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-sm sticky top-0 z-10 shrink-0">
         <div className="max-w-6xl mx-auto px-4 flex flex-wrap items-center gap-2 py-3">
           <span className="text-slate-500 text-xs uppercase tracking-wider mr-2">
             Barbería
@@ -30,7 +30,9 @@ function Layout() {
           </NavLink>
         </div>
       </nav>
-      <Outlet />
+      <main className="flex-1 flex flex-col min-h-0 w-full">
+        <Outlet />
+      </main>
     </div>
   )
 }
