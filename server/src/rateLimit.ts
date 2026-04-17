@@ -26,3 +26,12 @@ export const cancelByTokenRateLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'demasiados intentos, probá más tarde' },
 });
+
+/** Anti spam del reset del shop demo. */
+export const demoResetRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'demasiados reinicios, probá más tarde' },
+});

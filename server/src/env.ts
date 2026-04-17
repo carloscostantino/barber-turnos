@@ -15,6 +15,13 @@ const EnvSchema = z
     PORT: z.coerce.number().int().positive().default(3001),
     CLIENT_ORIGIN: z.string().min(1).default('http://localhost:5173'),
     TIMEZONE: z.string().min(1).default('America/Argentina/Buenos_Aires'),
+    /** Slug del shop usado en rutas legacy sin `/shops/:slug` (migración multi-tenant). */
+    DEFAULT_SHOP_SLUG: z.string().min(1).default('default'),
+    /** Secreto Stripe (webhook). Opcional hasta integrar cobros. */
+    STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
+    STRIPE_SECRET_KEY: z.string().min(1).optional(),
+    /** Price id de suscripción mensual en Stripe (ej. price_xxx). Opcional: sin esto no se genera Checkout al registrar. */
+    STRIPE_PRICE_ID: z.string().min(1).optional(),
     /** Secreto para firmar JWT del panel admin (mín. 16 caracteres). */
     JWT_SECRET: z.string().min(16),
     /**

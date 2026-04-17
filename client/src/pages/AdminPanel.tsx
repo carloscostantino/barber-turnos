@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  Link,
+  useLocation,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from 'react-router-dom'
 import { clearAdminToken, getAdminToken } from '../adminToken'
-import { API_BASE } from '../config'
+import { API_BASE, DEFAULT_SHOP_SLUG, shopPublicPath } from '../config'
 import { whatsappHrefFromPhone } from '../lib/contact'
 import { formatBlockedRangeDisplay } from '../lib/blockedRangeDisplay'
 import {
@@ -12,6 +19,7 @@ import {
   toInputDate,
 } from '../lib/format'
 import AdminLogin from './AdminLogin'
+import { isOnboardingDone, setOnboardingDone } from '../lib/onboardingStorage'
 
 /** Limpia sesión y recarga la app: evita estado React colgado si el JWT ya no sirve (401). */
 function reloadToLogin() {
@@ -51,9 +59,90 @@ type AdminTab =
   | 'servicios'
   | 'bloqueos'
 
+const ADMIN_TAB_IDS: AdminTab[] = [
+  'turnos',
+  'configuracion',
+  'horarios',
+  'servicios',
+  'bloqueos',
+]
+
+function tabFromQueryParam(raw: string | null): AdminTab {
+  if (raw && ADMIN_TAB_IDS.includes(raw as AdminTab)) return raw as AdminTab
+  return 'turnos'
+}
+
 type TurnosViewMode = 'dia' | 'lista'
 
 const DAY_LABELS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
+
+/** Confirmación en pantalla (sin `window.confirm`). */
+function ConfirmDialog({
+  open,
+  title,
+  message,
+  confirmLabel = 'Continuar',
+  cancelLabel = 'Cancelar',
+  confirmDanger,
+  onConfirm,
+  onCancel,
+}: {
+  open: boolean
+  title: string
+  message: string
+  confirmLabel?: string
+  cancelLabel?: string
+  /** Estilo rojo para acciones destructivas. */
+  confirmDanger?: boolean
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  if (!open) return null
+  return (
+    <div
+      className="fixed inset-0 z-[200] flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="confirm-dialog-title"
+    >
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/55 backdrop-blur-[1px]"
+        aria-label="Cerrar"
+        onClick={onCancel}
+      />
+      <div className="relative z-10 w-full max-w-md rounded-xl border border-slate-600/80 bg-slate-900 p-5 shadow-2xl shadow-black/40">
+        <h3
+          id="confirm-dialog-title"
+          className="text-base font-semibold text-slate-100"
+        >
+          {title}
+        </h3>
+        <p className="mt-2 text-sm text-slate-400 leading-relaxed">{message}</p>
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="text-sm px-3 py-2 rounded-lg border border-slate-600 text-slate-300 hover:bg-slate-800"
+          >
+            {cancelLabel}
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className={`text-sm px-3 py-2 rounded-lg font-medium ${
+              confirmDanger
+                ? 'bg-red-600 hover:bg-red-500 text-white'
+                : 'bg-violet-600 hover:bg-violet-500 text-white'
+            }`}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function statusLabel(s: string) {
   if (s === 'confirmed') return 'Confirmado'
@@ -128,6 +217,9 @@ function ContactLinks({
 }
 
 export default function AdminPanel() {
+  const { shopSlug: shopSlugParam } = useParams()
+  const shopSlug = shopSlugParam ?? DEFAULT_SHOP_SLUG
+
   const [token, setToken] = useState<string | null>(() =>
     normalizeStoredToken(getAdminToken()),
   )
@@ -142,13 +234,14 @@ export default function AdminPanel() {
   }, [])
 
   if (!token) {
-    return <AdminLogin onLoggedIn={onLoggedIn} />
+    return <AdminLogin shopSlug={shopSlug} onLoggedIn={onLoggedIn} />
   }
 
   return (
     <AdminAuthenticatedPanel
       token={token}
       onSessionInvalid={onSessionInvalid}
+      shopSlug={shopSlug}
     />
   )
 }
@@ -156,11 +249,12 @@ export default function AdminPanel() {
 function AdminAuthenticatedPanel({
   token,
   onSessionInvalid,
+  shopSlug,
 }: {
   token: string
   onSessionInvalid: () => void
+  shopSlug: string
 }) {
-  const [tab, setTab] = useState<AdminTab>('turnos')
   const [turnosViewMode, setTurnosViewMode] = useState<TurnosViewMode>('lista')
   const [date, setDate] = useState(() => toInputDate(new Date()))
   const [rows, setRows] = useState<AppointmentRow[]>([])
@@ -184,6 +278,30 @@ function AdminAuthenticatedPanel({
     () => ({ Authorization: `Bearer ${token}` }),
     [token],
   )
+
+  const navigate = useNavigate()
+  const location = useLocation()
+  const [searchParams] = useSearchParams()
+  const [tab, setTab] = useState<AdminTab>(() =>
+    tabFromQueryParam(searchParams.get('tab')),
+  )
+  const [showOnboarding, setShowOnboarding] = useState(
+    () =>
+      searchParams.get('onboarding') === '1' &&
+      !isOnboardingDone(shopSlug),
+  )
+
+  const finishOnboarding = useCallback(() => {
+    setOnboardingDone(shopSlug)
+    setShowOnboarding(false)
+    const next = new URLSearchParams(searchParams)
+    next.delete('onboarding')
+    const qs = next.toString()
+    navigate(
+      { pathname: location.pathname, search: qs ? `?${qs}` : '' },
+      { replace: true },
+    )
+  }, [shopSlug, searchParams, navigate, location.pathname])
 
   const loadAppointments = useCallback(
     async (signal?: AbortSignal) => {
@@ -378,7 +496,15 @@ function AdminAuthenticatedPanel({
   )
 
   return (
-    <div className="flex justify-center px-4">
+    <>
+      {showOnboarding && (
+        <AdminOnboardingOverlay
+          authHeader={authHeader}
+          onFinish={finishOnboarding}
+          shopSlug={shopSlug}
+        />
+      )}
+      <div className="flex justify-center px-4">
       <div className="w-full max-w-6xl py-10">
         <header className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -819,19 +945,222 @@ function AdminAuthenticatedPanel({
           <ServiciosTab authHeader={authHeader} />
         )}
         {tab === 'bloqueos' && (
-          <BloqueosTab authHeader={authHeader} />
+          <BloqueosTab authHeader={authHeader} shopSlug={shopSlug} />
         )}
+      </div>
+    </div>
+    </>
+  )
+}
+
+function AdminOnboardingOverlay({
+  authHeader,
+  shopSlug,
+  onFinish,
+}: {
+  authHeader: Record<string, string>
+  shopSlug: string
+  onFinish: () => void
+}) {
+  const [step, setStep] = useState(0)
+  const [dirtySteps, setDirtySteps] = useState<Record<number, boolean>>({})
+  const [pendingNav, setPendingNav] = useState<
+    | null
+    | { kind: 'step'; target: number }
+    | { kind: 'skip' }
+  >(null)
+
+  const markDirty = (s: number) => {
+    setDirtySteps((prev) => ({ ...prev, [s]: true }))
+  }
+  const clearDirty = (s: number) => {
+    setDirtySteps((prev) => ({ ...prev, [s]: false }))
+  }
+
+  const tryChangeStep = (next: number) => {
+    if (next === step) return
+    if (dirtySteps[step]) {
+      setPendingNav({ kind: 'step', target: next })
+      return
+    }
+    setStep(next)
+  }
+
+  const confirmPendingNav = () => {
+    if (!pendingNav) return
+    clearDirty(step)
+    if (pendingNav.kind === 'skip') {
+      onFinish()
+    } else {
+      setStep(pendingNav.target)
+    }
+    setPendingNav(null)
+  }
+
+  const cancelPendingNav = () => setPendingNav(null)
+
+  const finishOrSkip = () => {
+    if (step < 3 && dirtySteps[step]) {
+      setPendingNav({ kind: 'skip' })
+      return
+    }
+    onFinish()
+  }
+
+  return (
+    <div className="fixed inset-0 z-[100] flex flex-col bg-slate-950 overflow-hidden">
+      <ConfirmDialog
+        open={pendingNav != null}
+        title={
+          pendingNav?.kind === 'skip'
+            ? 'Salir del recorrido'
+            : 'Cambios sin guardar'
+        }
+        message={
+          pendingNav?.kind === 'skip'
+            ? 'Tenés cambios sin guardar en este paso. Si salís ahora, esos datos no se guardan en el servidor.'
+            : 'Tenés cambios sin guardar en este paso. Si continuás, podés perder esos cambios (podés volver y pulsar Guardar).'
+        }
+        confirmLabel={pendingNav?.kind === 'skip' ? 'Salir sin guardar' : 'Continuar sin guardar'}
+        cancelLabel="Volver"
+        confirmDanger={pendingNav?.kind === 'skip'}
+        onConfirm={confirmPendingNav}
+        onCancel={cancelPendingNav}
+      />
+      <div className="border-b border-slate-800 bg-slate-900/95 px-4 py-4 shrink-0">
+        <div className="max-w-3xl mx-auto flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-xs text-violet-400 font-medium uppercase tracking-wide">
+              Configuración inicial
+            </p>
+            <h2 className="text-lg font-semibold text-slate-100">
+              {step === 0 && 'Paso 1 de 3 · Nombre y contacto'}
+              {step === 1 && 'Paso 2 de 3 · Horarios'}
+              {step === 2 && 'Paso 3 de 3 · Servicios'}
+              {step === 3 && 'Listo'}
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={finishOrSkip}
+            className="text-sm px-3 py-1.5 rounded border border-slate-600 text-slate-400 hover:bg-slate-800"
+          >
+            Omitir y entrar al panel
+          </button>
+        </div>
+        <div className="max-w-3xl mx-auto mt-3 flex gap-1">
+          {[0, 1, 2].map((i) => (
+            <div
+              key={i}
+              className={`h-1 flex-1 rounded ${
+                step > i ? 'bg-violet-500' : step === i ? 'bg-violet-500/70' : 'bg-slate-800'
+              }`}
+            />
+          ))}
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto px-4 py-6 min-h-0">
+        <div className="max-w-3xl mx-auto">
+          {step === 0 && (
+            <ConfiguracionTab
+              authHeader={authHeader}
+              onDirtyChange={() => markDirty(0)}
+              onSaved={() => clearDirty(0)}
+            />
+          )}
+          {step === 1 && (
+            <HorariosTab
+              authHeader={authHeader}
+              onDirtyChange={() => markDirty(1)}
+              onSaved={() => clearDirty(1)}
+            />
+          )}
+          {step === 2 && (
+            <ServiciosTab
+              authHeader={authHeader}
+              onDirtyChange={() => markDirty(2)}
+              onSaved={() => clearDirty(2)}
+            />
+          )}
+          {step === 3 && (
+            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-8 text-center space-y-4">
+              <h3 className="text-xl font-medium text-slate-100">
+                ¡Gracias por completar el recorrido!
+              </h3>
+              <p className="text-slate-400 text-sm max-w-md mx-auto">
+                Desde la pestaña{' '}
+                <span className="text-slate-200 font-medium">Bloqueos</span> podés marcar
+                días u horas en los que no querés ofrecer turnos.
+              </p>
+              <p className="text-slate-500 text-sm">
+                Página pública de reservas:{' '}
+                <Link
+                  to={`/s/${shopSlug}`}
+                  className="text-emerald-400 underline underline-offset-2"
+                >
+                  /s/{shopSlug}
+                </Link>
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="border-t border-slate-800 bg-slate-900/95 px-4 py-4 shrink-0">
+        <div className="max-w-3xl mx-auto flex flex-wrap justify-between gap-3 items-center">
+          <button
+            type="button"
+            disabled={step === 0}
+            onClick={() => tryChangeStep(Math.max(0, step - 1))}
+            className="text-sm px-4 py-2 rounded border border-slate-600 text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Atrás
+          </button>
+          <div className="flex gap-2">
+            {step < 3 ? (
+              <button
+                type="button"
+                onClick={() => tryChangeStep(step === 2 ? 3 : step + 1)}
+                className="text-sm px-4 py-2 rounded bg-violet-600 hover:bg-violet-500 text-white"
+              >
+                {step === 2 ? 'Finalizar y ver resumen' : 'Siguiente'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onFinish}
+                className="text-sm px-4 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-white"
+              >
+                Ir al panel
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   )
 }
 
-function ConfiguracionTab({ authHeader }: { authHeader: Record<string, string> }) {
+function ConfiguracionTab({
+  authHeader,
+  onDirtyChange,
+  onSaved,
+}: {
+  authHeader: Record<string, string>
+  onDirtyChange?: () => void
+  onSaved?: () => void
+}) {
+  const touchDirty = () => onDirtyChange?.()
   const [shopName, setShopName] = useState('')
   const [minH, setMinH] = useState(2)
   const [maxD, setMaxD] = useState(15)
   const [contactWa, setContactWa] = useState('')
   const [contactEmail, setContactEmail] = useState('')
+  const [addressStreet, setAddressStreet] = useState('')
+  const [addressNumber, setAddressNumber] = useState('')
+  const [addressFloor, setAddressFloor] = useState('')
+  const [addressCity, setAddressCity] = useState('')
+  const [addressRegion, setAddressRegion] = useState('')
+  const [addressPostalCode, setAddressPostalCode] = useState('')
   const [contactAddress, setContactAddress] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -857,12 +1186,24 @@ function ConfiguracionTab({ authHeader }: { authHeader: Record<string, string> }
           contactWhatsapp: string | null
           contactEmail: string | null
           contactAddress: string | null
+          addressStreet: string | null
+          addressNumber: string | null
+          addressFloor: string | null
+          addressCity: string | null
+          addressRegion: string | null
+          addressPostalCode: string | null
         }
         setShopName(d.shopName ?? '')
         setMinH(d.bookingMinLeadHours)
         setMaxD(d.bookingMaxDaysAhead)
         setContactWa(d.contactWhatsapp ?? '')
         setContactEmail(d.contactEmail ?? '')
+        setAddressStreet(d.addressStreet ?? '')
+        setAddressNumber(d.addressNumber ?? '')
+        setAddressFloor(d.addressFloor ?? '')
+        setAddressCity(d.addressCity ?? '')
+        setAddressRegion(d.addressRegion ?? '')
+        setAddressPostalCode(d.addressPostalCode ?? '')
         setContactAddress(d.contactAddress ?? '')
       } catch (e) {
         setErr(e instanceof Error ? e.message : 'Error')
@@ -892,6 +1233,12 @@ function ConfiguracionTab({ authHeader }: { authHeader: Record<string, string> }
           shopName: shopName.trim() === '' ? null : shopName.trim(),
           contactWhatsapp: contactWa.trim() === '' ? null : contactWa,
           contactEmail: contactEmail.trim() === '' ? null : contactEmail,
+          addressStreet: addressStreet.trim() === '' ? null : addressStreet,
+          addressNumber: addressNumber.trim() === '' ? null : addressNumber,
+          addressFloor: addressFloor.trim() === '' ? null : addressFloor,
+          addressCity: addressCity.trim() === '' ? null : addressCity,
+          addressRegion: addressRegion.trim() === '' ? null : addressRegion,
+          addressPostalCode: addressPostalCode.trim() === '' ? null : addressPostalCode,
           contactAddress: contactAddress.trim() === '' ? null : contactAddress,
         }),
       })
@@ -906,6 +1253,7 @@ function ConfiguracionTab({ authHeader }: { authHeader: Record<string, string> }
         throw new Error(data?.error ?? 'No se pudo guardar')
       }
       setMsg('Guardado.')
+      onSaved?.()
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Error')
     } finally {
@@ -935,24 +1283,129 @@ function ConfiguracionTab({ authHeader }: { authHeader: Record<string, string> }
             autoComplete="organization"
             className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
             value={shopName}
-            onChange={(e) => setShopName(e.target.value)}
+            onChange={(e) => {
+              setShopName(e.target.value)
+              touchDirty()
+            }}
             placeholder="Ej: Barbería Central"
           />
         </div>
+        <div className="space-y-3">
+          <p className="text-xs text-slate-500">
+            Podés cargar la dirección por partes (opcional) o en una sola línea abajo.
+            Si completás calle y ciudad, la reserva pública y el mapa usan el texto
+            armado automáticamente.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-sm text-slate-300">Calle</label>
+              <input
+                type="text"
+                maxLength={200}
+                className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
+                value={addressStreet}
+                onChange={(e) => {
+                  setAddressStreet(e.target.value)
+                  touchDirty()
+                }}
+                placeholder="Ej: Av. Corrientes"
+                autoComplete="street-address"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-sm text-slate-300">Número</label>
+              <input
+                type="text"
+                maxLength={200}
+                className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
+                value={addressNumber}
+                onChange={(e) => {
+                  setAddressNumber(e.target.value)
+                  touchDirty()
+                }}
+                placeholder="1234"
+              />
+            </div>
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-sm text-slate-300">Piso / depto (opcional)</label>
+            <input
+              type="text"
+              maxLength={200}
+              className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
+              value={addressFloor}
+              onChange={(e) => {
+                setAddressFloor(e.target.value)
+                touchDirty()
+              }}
+              placeholder="3 B"
+            />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-sm text-slate-300">Código postal</label>
+              <input
+                type="text"
+                maxLength={200}
+                className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
+                value={addressPostalCode}
+                onChange={(e) => {
+                  setAddressPostalCode(e.target.value)
+                  touchDirty()
+                }}
+                placeholder="C1414"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-sm text-slate-300">Ciudad / localidad</label>
+              <input
+                type="text"
+                maxLength={200}
+                className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
+                value={addressCity}
+                onChange={(e) => {
+                  setAddressCity(e.target.value)
+                  touchDirty()
+                }}
+                placeholder="CABA"
+                autoComplete="address-level2"
+              />
+            </div>
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-sm text-slate-300">Provincia / región</label>
+            <input
+              type="text"
+              maxLength={200}
+              className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
+              value={addressRegion}
+              onChange={(e) => {
+                setAddressRegion(e.target.value)
+                touchDirty()
+              }}
+              placeholder="Buenos Aires"
+              autoComplete="address-level1"
+            />
+          </div>
+        </div>
         <div className="flex flex-col gap-1">
           <label className="text-sm text-slate-300">
-            Dirección del local (opcional)
+            Dirección en una línea (opcional)
           </label>
           <textarea
             className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm min-h-[72px] resize-y"
             value={contactAddress}
-            onChange={(e) => setContactAddress(e.target.value)}
-            placeholder="Ej: Av. Corrientes 1234, CABA"
+            onChange={(e) => {
+              setContactAddress(e.target.value)
+              touchDirty()
+            }}
+            placeholder="Si no usás los campos de arriba, podés escribir todo acá (ej: Av. Corrientes 1234, CABA)"
             maxLength={500}
             rows={3}
           />
           <p className="text-xs text-slate-500">
-            Aparece en la reserva pública con enlace al mapa.
+            Aparece en la reserva pública con enlace al mapa; si hay partes
+            cargadas, se prioriza el texto compuesto.
           </p>
         </div>
         <div className="flex flex-col gap-1">
@@ -963,7 +1416,10 @@ function ConfiguracionTab({ authHeader }: { authHeader: Record<string, string> }
             autoComplete="tel"
             className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
             value={contactWa}
-            onChange={(e) => setContactWa(e.target.value)}
+            onChange={(e) => {
+              setContactWa(e.target.value)
+              touchDirty()
+            }}
             placeholder="54911…"
           />
           <p className="text-xs text-slate-500">
@@ -980,7 +1436,10 @@ function ConfiguracionTab({ authHeader }: { authHeader: Record<string, string> }
             autoComplete="email"
             className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
             value={contactEmail}
-            onChange={(e) => setContactEmail(e.target.value)}
+            onChange={(e) => {
+              setContactEmail(e.target.value)
+              touchDirty()
+            }}
             placeholder="local@ejemplo.com"
           />
         </div>
@@ -1002,7 +1461,10 @@ function ConfiguracionTab({ authHeader }: { authHeader: Record<string, string> }
             max={168}
             className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
             value={minH}
-            onChange={(e) => setMinH(Number(e.target.value))}
+            onChange={(e) => {
+              setMinH(Number(e.target.value))
+              touchDirty()
+            }}
           />
         </div>
         <div className="flex flex-col gap-1">
@@ -1013,7 +1475,10 @@ function ConfiguracionTab({ authHeader }: { authHeader: Record<string, string> }
             max={365}
             className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
             value={maxD}
-            onChange={(e) => setMaxD(Number(e.target.value))}
+            onChange={(e) => {
+              setMaxD(Number(e.target.value))
+              touchDirty()
+            }}
           />
         </div>
       </div>
@@ -1045,14 +1510,64 @@ type BhRow = {
   is_closed: boolean
   open_time: string | null
   close_time: string | null
+  open_time_afternoon: string | null
+  close_time_afternoon: string | null
 }
 
-function HorariosTab({ authHeader }: { authHeader: Record<string, string> }) {
+function hasSiesta(r: BhRow) {
+  return !!(r.open_time_afternoon && r.close_time_afternoon)
+}
+
+/** Un solo tramo: inicio mañana → fin del día (fin de tarde si había dos turnos). */
+function mergeSplitToContinuous(r: BhRow): Partial<BhRow> {
+  const start = r.open_time ?? '09:00'
+  const end =
+    hasSiesta(r) && r.close_time_afternoon
+      ? r.close_time_afternoon
+      : r.close_time ?? '19:00'
+  return {
+    open_time: start,
+    close_time: end,
+    open_time_afternoon: null,
+    close_time_afternoon: null,
+  }
+}
+
+/** Pasa de horario continuo a dos turnos (valores por defecto razonables). */
+function enableSiestaForRow(r: BhRow): BhRow {
+  if (hasSiesta(r)) return r
+  const fullEnd = r.close_time ?? '19:00'
+  const afternoonOpen = '15:00'
+  // Usa el cierre original como fin de tarde solo si es posterior al inicio
+  // de tarde sugerido; si no, cae a un default razonable para evitar un
+  // rango invertido (p.ej. cierre previo a las 15:00).
+  const afternoonClose = fullEnd > afternoonOpen ? fullEnd : '19:00'
+  return {
+    ...r,
+    open_time: r.open_time ?? '09:00',
+    close_time: '13:00',
+    open_time_afternoon: afternoonOpen,
+    close_time_afternoon: afternoonClose,
+  }
+}
+
+function HorariosTab({
+  authHeader,
+  onDirtyChange,
+  onSaved,
+}: {
+  authHeader: Record<string, string>
+  onDirtyChange?: () => void
+  onSaved?: () => void
+}) {
   const [rows, setRows] = useState<BhRow[]>([])
+  const [editedDays, setEditedDays] = useState<Set<number>>(() => new Set())
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
+
+  const touchDirty = () => onDirtyChange?.()
 
   const load = useCallback(async () => {
     const res = await fetch(`${API_BASE}/admin/business-hours`, {
@@ -1064,7 +1579,15 @@ function HorariosTab({ authHeader }: { authHeader: Record<string, string> }) {
     }
     if (!res.ok) throw new Error('No se pudieron cargar los horarios')
     const data = (await res.json()) as BhRow[]
-    setRows(data.sort((a, b) => a.day_of_week - b.day_of_week))
+    const normalized = data
+      .sort((a, b) => a.day_of_week - b.day_of_week)
+      .map((r) => ({
+        ...r,
+        open_time_afternoon: r.open_time_afternoon ?? null,
+        close_time_afternoon: r.close_time_afternoon ?? null,
+      }))
+    setRows(normalized)
+    setEditedDays(new Set())
   }, [authHeader])
 
   useEffect(() => {
@@ -1086,10 +1609,79 @@ function HorariosTab({ authHeader }: { authHeader: Record<string, string> }) {
     return () => clearTimeout(t)
   }, [msg])
 
+  const markEdited = (dow: number) => {
+    setEditedDays((prev) => {
+      if (prev.has(dow)) return prev
+      const next = new Set(prev)
+      next.add(dow)
+      return next
+    })
+  }
+
   const updateRow = (dow: number, patch: Partial<BhRow>) => {
     setRows((prev) =>
       prev.map((r) => (r.day_of_week === dow ? { ...r, ...patch } : r)),
     )
+    markEdited(dow)
+    touchDirty()
+  }
+
+  const toggleDaySiesta = (dow: number, on: boolean) => {
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.day_of_week !== dow || r.is_closed) return r
+        if (!on) {
+          return { ...r, ...mergeSplitToContinuous(r) }
+        }
+        return enableSiestaForRow(r)
+      }),
+    )
+    markEdited(dow)
+    touchDirty()
+  }
+
+  const bulkApplyTwoShiftsMonFri = () => {
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.is_closed || r.day_of_week > 4) return r
+        if (hasSiesta(r)) return r
+        return enableSiestaForRow(r)
+      }),
+    )
+    touchDirty()
+  }
+
+  /** Lun–vie: pasa todos los días abiertos a un solo tramo (quita corte al mediodía). */
+  const bulkContinuousMonFri = () => {
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.is_closed || r.day_of_week > 4) return r
+        if (!hasSiesta(r)) return r
+        return { ...r, ...mergeSplitToContinuous(r) }
+      }),
+    )
+    touchDirty()
+  }
+
+  /** Copia los horarios del día `dow` al resto de la semana.
+   * Si un día está cerrado lo mantiene cerrado, pero actualiza sus horarios
+   * para que, al reabrirlo, herede el mismo horario. */
+  const applyDayToAll = (dow: number) => {
+    const src = rows.find((r) => r.day_of_week === dow)
+    if (!src) return
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.day_of_week === dow) return r
+        return {
+          ...r,
+          open_time: src.open_time,
+          close_time: src.close_time,
+          open_time_afternoon: src.open_time_afternoon,
+          close_time_afternoon: src.close_time_afternoon,
+        }
+      }),
+    )
+    touchDirty()
   }
 
   const save = async () => {
@@ -1097,12 +1689,25 @@ function HorariosTab({ authHeader }: { authHeader: Record<string, string> }) {
       setSaving(true)
       setErr(null)
       setMsg(null)
-      const body = rows.map((r) => ({
-        dayOfWeek: r.day_of_week,
-        isClosed: r.is_closed,
-        openTime: r.is_closed ? null : r.open_time,
-        closeTime: r.is_closed ? null : r.close_time,
-      }))
+      const body = rows.map((r) => {
+        const split = hasSiesta(r)
+          ? {
+              openTimeAfternoon: r.open_time_afternoon,
+              closeTimeAfternoon: r.close_time_afternoon,
+            }
+          : {
+              openTimeAfternoon: null as string | null,
+              closeTimeAfternoon: null as string | null,
+            }
+        return {
+          dayOfWeek: r.day_of_week,
+          isClosed: r.is_closed,
+          openTime: r.open_time,
+          closeTime: r.close_time,
+          openTimeAfternoon: split.openTimeAfternoon,
+          closeTimeAfternoon: split.closeTimeAfternoon,
+        }
+      })
       const res = await fetch(`${API_BASE}/admin/business-hours`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', ...authHeader },
@@ -1119,6 +1724,7 @@ function HorariosTab({ authHeader }: { authHeader: Record<string, string> }) {
         throw new Error(data?.error ?? 'No se pudo guardar')
       }
       setMsg('Horarios guardados.')
+      onSaved?.()
       await load()
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Error')
@@ -1133,63 +1739,160 @@ function HorariosTab({ authHeader }: { authHeader: Record<string, string> }) {
 
   return (
     <div className="space-y-4 rounded-xl border border-slate-800 bg-slate-900/60 p-6">
-      <h2 className="text-lg font-medium text-slate-100">
-        Horario semanal
-      </h2>
-      <div className="space-y-3">
-        {rows.map((r) => (
-          <div
-            key={r.day_of_week}
-            className="flex flex-wrap items-center gap-3 border-b border-slate-800/80 pb-3"
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
+        <h2 className="text-lg font-medium text-slate-100">Horario semanal</h2>
+        <div className="flex flex-wrap gap-2 text-xs">
+          <button
+            type="button"
+            className="rounded border border-slate-600 px-2 py-1.5 text-slate-400 hover:border-violet-500/50 hover:text-slate-200"
+            onClick={bulkApplyTwoShiftsMonFri}
           >
-            <span className="w-10 text-sm text-slate-300">
-              {DAY_LABELS[r.day_of_week] ?? r.day_of_week}
-            </span>
-            <label className="flex items-center gap-2 text-sm text-slate-400">
-              <input
-                type="checkbox"
-                checked={r.is_closed}
-                onChange={(e) =>
-                  updateRow(r.day_of_week, { is_closed: e.target.checked })
-                }
-              />
-              Cerrado
-            </label>
-            {!r.is_closed && (
-              <>
+            Dos turnos en lun–vie
+          </button>
+          <button
+            type="button"
+            className="rounded border border-slate-600 px-2 py-1.5 text-slate-400 hover:border-violet-500/50 hover:text-slate-200"
+            onClick={bulkContinuousMonFri}
+          >
+            Un turno en lun–vie
+          </button>
+        </div>
+      </div>
+      <p className="text-xs text-slate-500">
+        Marcá <span className="text-slate-400">Dos turnos</span> solo en los días
+        que cerrás al mediodía; el resto puede ser un horario continuo (ej. sábado
+        de corrido). Los atajos de lun–vie aplican solo a esos días; sábado y domingo
+        se siguen editando por fila.
+      </p>
+
+      <div className="space-y-0 divide-y divide-slate-800/90">
+        {rows.map((r) => (
+          <div key={r.day_of_week} className="py-3 first:pt-0">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
+              <span className="w-9 shrink-0 text-slate-400">
+                {DAY_LABELS[r.day_of_week] ?? r.day_of_week}
+              </span>
+              <label className="flex shrink-0 items-center gap-1.5 text-slate-500">
                 <input
-                  type="time"
-                  className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm"
-                  value={r.open_time ?? '09:00'}
-                  onChange={(e) =>
-                    updateRow(r.day_of_week, { open_time: e.target.value })
-                  }
+                  type="checkbox"
+                  className="rounded border-slate-600"
+                  checked={r.is_closed}
+                  onChange={(e) => {
+                    const closed = e.target.checked
+                    updateRow(r.day_of_week, {
+                      is_closed: closed,
+                      open_time: r.open_time ?? '09:00',
+                      close_time: r.close_time ?? '19:00',
+                    })
+                  }}
                 />
-                <span className="text-slate-500">–</span>
-                <input
-                  type="time"
-                  className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm"
-                  value={r.close_time ?? '19:00'}
-                  onChange={(e) =>
-                    updateRow(r.day_of_week, { close_time: e.target.value })
-                  }
-                />
-              </>
+                Cerrado
+              </label>
+              {!r.is_closed && (
+                <label className="flex shrink-0 items-center gap-1.5 text-xs text-slate-500">
+                  <input
+                    type="checkbox"
+                    className="rounded border-slate-600"
+                    checked={hasSiesta(r)}
+                    onChange={(e) =>
+                      toggleDaySiesta(r.day_of_week, e.target.checked)
+                    }
+                  />
+                  Dos turnos
+                </label>
+              )}
+              {!r.is_closed && !hasSiesta(r) && (
+                <>
+                  <input
+                    type="time"
+                    className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm tabular-nums"
+                    value={r.open_time ?? '09:00'}
+                    onChange={(e) =>
+                      updateRow(r.day_of_week, { open_time: e.target.value })
+                    }
+                  />
+                  <span className="text-slate-600">–</span>
+                  <input
+                    type="time"
+                    className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm tabular-nums"
+                    value={r.close_time ?? '19:00'}
+                    onChange={(e) =>
+                      updateRow(r.day_of_week, { close_time: e.target.value })
+                    }
+                  />
+                </>
+              )}
+              {!r.is_closed && hasSiesta(r) && (
+                <>
+                  <span className="text-[11px] uppercase tracking-wide text-slate-600">
+                    Mañ.
+                  </span>
+                  <input
+                    type="time"
+                    className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm tabular-nums"
+                    value={r.open_time ?? '09:00'}
+                    onChange={(e) =>
+                      updateRow(r.day_of_week, { open_time: e.target.value })
+                    }
+                  />
+                  <span className="text-slate-600">–</span>
+                  <input
+                    type="time"
+                    className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm tabular-nums"
+                    value={r.close_time ?? '13:00'}
+                    onChange={(e) =>
+                      updateRow(r.day_of_week, { close_time: e.target.value })
+                    }
+                  />
+                  <span className="ml-1 text-[11px] uppercase tracking-wide text-slate-600">
+                    Tarde
+                  </span>
+                  <input
+                    type="time"
+                    className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm tabular-nums"
+                    value={r.open_time_afternoon ?? '17:00'}
+                    onChange={(e) =>
+                      updateRow(r.day_of_week, {
+                        open_time_afternoon: e.target.value,
+                      })
+                    }
+                  />
+                  <span className="text-slate-600">–</span>
+                  <input
+                    type="time"
+                    className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm tabular-nums"
+                    value={r.close_time_afternoon ?? '21:00'}
+                    onChange={(e) =>
+                      updateRow(r.day_of_week, {
+                        close_time_afternoon: e.target.value,
+                      })
+                    }
+                  />
+                </>
+              )}
+            </div>
+            {!r.is_closed && editedDays.has(r.day_of_week) && (
+              <div className="mt-2 flex flex-wrap gap-2 pl-12 text-xs sm:pl-11">
+                <button
+                  type="button"
+                  className="rounded border border-slate-600 px-2 py-1 text-slate-400 hover:border-violet-500/50 hover:text-slate-200"
+                  onClick={() => applyDayToAll(r.day_of_week)}
+                >
+                  Aplicar a todos los días
+                </button>
+              </div>
             )}
           </div>
         ))}
       </div>
-      {err && (
-        <p className="text-sm text-red-400">{err}</p>
-      )}
-      {msg && (
-        <p className="text-sm text-emerald-400">{msg}</p>
-      )}
+
+      {err && <p className="text-sm text-red-400">{err}</p>}
+      {msg && <p className="text-sm text-emerald-400">{msg}</p>}
       <button
         type="button"
         disabled={saving}
         onClick={() => void save()}
-        className="text-sm px-4 py-2 rounded bg-violet-600 hover:bg-violet-500 disabled:opacity-50"
+        className="text-sm rounded bg-violet-600 px-4 py-2 hover:bg-violet-500 disabled:opacity-50"
       >
         {saving ? 'Guardando…' : 'Guardar horarios'}
       </button>
@@ -1206,7 +1909,16 @@ type ServiceRow = {
   is_favorite: boolean
 }
 
-function ServiciosTab({ authHeader }: { authHeader: Record<string, string> }) {
+function ServiciosTab({
+  authHeader,
+  onDirtyChange,
+  onSaved,
+}: {
+  authHeader: Record<string, string>
+  onDirtyChange?: () => void
+  onSaved?: () => void
+}) {
+  const touchDirty = () => onDirtyChange?.()
   const [rows, setRows] = useState<ServiceRow[]>([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
@@ -1220,6 +1932,8 @@ function ServiciosTab({ authHeader }: { authHeader: Record<string, string> }) {
   const [editPrice, setEditPrice] = useState('')
   const [savingEditId, setSavingEditId] = useState<string | null>(null)
   const [savingFavoriteId, setSavingFavoriteId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     const res = await fetch(`${API_BASE}/admin/services`, {
@@ -1248,6 +1962,7 @@ function ServiciosTab({ authHeader }: { authHeader: Record<string, string> }) {
 
   const toggleActive = async (id: string, active: boolean) => {
     try {
+      touchDirty()
       setErr(null)
       const res = await fetch(`${API_BASE}/admin/services/${id}`, {
         method: 'PATCH',
@@ -1259,14 +1974,52 @@ function ServiciosTab({ authHeader }: { authHeader: Record<string, string> }) {
         return
       }
       if (!res.ok) throw new Error('No se pudo actualizar')
+      onSaved?.()
       await load()
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Error')
     }
   }
 
+  const executeDeleteService = async (id: string) => {
+    try {
+      touchDirty()
+      setDeletingId(id)
+      setErr(null)
+      const res = await fetch(`${API_BASE}/admin/services/${id}`, {
+        method: 'DELETE',
+        headers: authHeader,
+      })
+      if (res.status === 401) {
+        reloadToLogin()
+        return
+      }
+      if (res.status === 409) {
+        const data = (await res.json().catch(() => null)) as {
+          error?: string
+        } | null
+        setErr(
+          data?.error ??
+            'No se puede eliminar: hay turnos con este servicio. Desactivalo en su lugar.',
+        )
+        setDeleteConfirmId(null)
+        return
+      }
+      if (!res.ok) throw new Error('No se pudo eliminar')
+      setDeleteConfirmId(null)
+      onSaved?.()
+      await load()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Error')
+      setDeleteConfirmId(null)
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   const toggleFavorite = async (id: string, isFavorite: boolean) => {
     try {
+      touchDirty()
       setSavingFavoriteId(id)
       setErr(null)
       const res = await fetch(`${API_BASE}/admin/services/${id}`, {
@@ -1279,6 +2032,7 @@ function ServiciosTab({ authHeader }: { authHeader: Record<string, string> }) {
         return
       }
       if (!res.ok) throw new Error('No se pudo actualizar el favorito')
+      onSaved?.()
       await load()
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Error')
@@ -1317,6 +2071,7 @@ function ServiciosTab({ authHeader }: { authHeader: Record<string, string> }) {
         throw new Error(data?.error ?? 'No se pudo crear')
       }
       setName('')
+      onSaved?.()
       await load()
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Error')
@@ -1326,6 +2081,7 @@ function ServiciosTab({ authHeader }: { authHeader: Record<string, string> }) {
   }
 
   const startEdit = (r: ServiceRow) => {
+    touchDirty()
     setEditingId(r.id)
     setEditName(r.name)
     setEditDur(r.duration_minutes)
@@ -1366,6 +2122,7 @@ function ServiciosTab({ authHeader }: { authHeader: Record<string, string> }) {
         throw new Error(data?.error ?? 'No se pudo guardar')
       }
       setEditingId(null)
+      onSaved?.()
       await load()
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Error')
@@ -1379,7 +2136,20 @@ function ServiciosTab({ authHeader }: { authHeader: Record<string, string> }) {
   }
 
   return (
-    <div className="space-y-6">
+    <>
+      <ConfirmDialog
+        open={deleteConfirmId != null}
+        title="Eliminar servicio"
+        message="Se va a borrar de forma permanente. Si hay turnos históricos con este servicio, no se puede eliminar: en ese caso desactivalo."
+        confirmLabel="Eliminar"
+        cancelLabel="Cancelar"
+        confirmDanger
+        onConfirm={() => {
+          if (deleteConfirmId) void executeDeleteService(deleteConfirmId)
+        }}
+        onCancel={() => setDeleteConfirmId(null)}
+      />
+      <div className="space-y-6">
       <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-6 space-y-3">
         <h2 className="text-lg font-medium text-slate-100">Nuevo servicio</h2>
         <div className="grid sm:grid-cols-2 gap-3">
@@ -1395,7 +2165,10 @@ function ServiciosTab({ authHeader }: { authHeader: Record<string, string> }) {
               placeholder="Ej: Corte + barba"
               className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => {
+                setName(e.target.value)
+                touchDirty()
+              }}
             />
           </div>
           <div className="flex flex-col gap-1">
@@ -1411,7 +2184,10 @@ function ServiciosTab({ authHeader }: { authHeader: Record<string, string> }) {
               min={5}
               className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
               value={dur}
-              onChange={(e) => setDur(Number(e.target.value))}
+              onChange={(e) => {
+                setDur(Number(e.target.value))
+                touchDirty()
+              }}
             />
           </div>
           <div className="flex flex-col gap-1">
@@ -1426,7 +2202,10 @@ function ServiciosTab({ authHeader }: { authHeader: Record<string, string> }) {
               placeholder="1500"
               className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
               value={price}
-              onChange={(e) => setPrice(e.target.value)}
+              onChange={(e) => {
+                setPrice(e.target.value)
+                touchDirty()
+              }}
             />
           </div>
         </div>
@@ -1458,7 +2237,8 @@ function ServiciosTab({ authHeader }: { authHeader: Record<string, string> }) {
               <th className="px-4 py-2">Precio</th>
               <th className="px-4 py-2">Favorito</th>
               <th className="px-4 py-2">Activo</th>
-              <th className="px-4 py-2 w-40">Acciones</th>
+              <th className="px-4 py-2 w-44">Acciones</th>
+              <th className="px-4 py-2 w-24">Eliminar</th>
             </tr>
           </thead>
           <tbody>
@@ -1470,7 +2250,10 @@ function ServiciosTab({ authHeader }: { authHeader: Record<string, string> }) {
                       type="text"
                       className="w-full min-w-[10rem] bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm"
                       value={editName}
-                      onChange={(e) => setEditName(e.target.value)}
+                      onChange={(e) => {
+                        setEditName(e.target.value)
+                        touchDirty()
+                      }}
                       aria-label={`Nombre (${r.name})`}
                     />
                   ) : (
@@ -1484,7 +2267,10 @@ function ServiciosTab({ authHeader }: { authHeader: Record<string, string> }) {
                       min={5}
                       className="w-24 bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm"
                       value={editDur}
-                      onChange={(e) => setEditDur(Number(e.target.value))}
+                      onChange={(e) => {
+                        setEditDur(Number(e.target.value))
+                        touchDirty()
+                      }}
                       aria-label="Duración en minutos"
                     />
                   ) : (
@@ -1498,7 +2284,10 @@ function ServiciosTab({ authHeader }: { authHeader: Record<string, string> }) {
                       inputMode="decimal"
                       className="w-28 bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm"
                       value={editPrice}
-                      onChange={(e) => setEditPrice(e.target.value)}
+                      onChange={(e) => {
+                        setEditPrice(e.target.value)
+                        touchDirty()
+                      }}
                       aria-label="Precio en pesos"
                     />
                   ) : (
@@ -1531,19 +2320,19 @@ function ServiciosTab({ authHeader }: { authHeader: Record<string, string> }) {
                   </button>
                 </td>
                 <td className="px-4 py-2 align-top">
-                  <button
-                    type="button"
-                    disabled={editingId === r.id}
-                    onClick={() => void toggleActive(r.id, r.active)}
-                    className={`text-xs px-2 py-1 rounded border disabled:opacity-40 ${
-                      r.active
-                        ? 'border-emerald-600 text-emerald-300'
-                        : 'border-slate-600 text-slate-500'
-                    }`}
-                  >
-                    {r.active ? 'Sí' : 'No'}
-                  </button>
-                </td>
+                    <button
+                      type="button"
+                      disabled={editingId === r.id}
+                      onClick={() => void toggleActive(r.id, r.active)}
+                      className={`text-xs px-2 py-1 rounded border disabled:opacity-40 ${
+                        r.active
+                          ? 'border-emerald-600 text-emerald-300'
+                          : 'border-slate-600 text-slate-500'
+                      }`}
+                    >
+                      {r.active ? 'Sí' : 'No'}
+                    </button>
+                  </td>
                 <td className="px-4 py-2 align-top">
                   {editingId === r.id ? (
                     <div className="flex flex-wrap gap-2">
@@ -1574,12 +2363,27 @@ function ServiciosTab({ authHeader }: { authHeader: Record<string, string> }) {
                     </button>
                   )}
                 </td>
+                <td className="px-4 py-2 align-top">
+                  <button
+                    type="button"
+                    disabled={
+                      editingId === r.id ||
+                      deletingId === r.id ||
+                      savingFavoriteId === r.id
+                    }
+                    onClick={() => setDeleteConfirmId(r.id)}
+                    className="text-xs px-2 py-1 rounded border border-red-900/80 text-red-300 hover:bg-red-950/50 disabled:opacity-40"
+                  >
+                    {deletingId === r.id ? '…' : 'Eliminar'}
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
     </div>
+    </>
   )
 }
 
@@ -1590,7 +2394,13 @@ type BlockedRow = {
   note: string | null
 }
 
-function BloqueosTab({ authHeader }: { authHeader: Record<string, string> }) {
+function BloqueosTab({
+  authHeader,
+  shopSlug,
+}: {
+  authHeader: Record<string, string>
+  shopSlug: string
+}) {
   const [rows, setRows] = useState<BlockedRow[]>([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
@@ -1604,13 +2414,13 @@ function BloqueosTab({ authHeader }: { authHeader: Record<string, string> }) {
   const [shopTz, setShopTz] = useState('America/Argentina/Buenos_Aires')
 
   useEffect(() => {
-    void fetch(`${API_BASE}/public-settings`)
+    void fetch(shopPublicPath(shopSlug, 'public-settings'))
       .then((r) => (r.ok ? r.json() : null))
       .then((d: { timezone?: string } | null) => {
         if (d?.timezone) setShopTz(d.timezone)
       })
       .catch(() => {})
-  }, [])
+  }, [shopSlug])
 
   const blockedRowLabels = (r: BlockedRow) => {
     try {

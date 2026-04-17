@@ -1,5 +1,15 @@
 ## Sistema de turnos para barbería
 
+### Reglas de seguridad para el asistente (PC del trabajo)
+
+Esta máquina es una PC del trabajo gestionada por la empresa. Para evitar que un agente IA intente "desbloquearse" modificando Windows (permisos NTFS, registro, Defender, políticas, firewall, etc.), este repo tiene dos capas de reglas textuales:
+
+- **Nivel repo (automático):** [`.cursor/rules/pc-safety.mdc`](.cursor/rules/pc-safety.mdc) con `alwaysApply: true`. Cursor lo carga solo en cada sesión abierta en este proyecto.
+- **Nivel usuario (global, requiere un pegado único):** ver [`docs/CURSOR_USER_RULES.md`](docs/CURSOR_USER_RULES.md). Pegar ese bloque una vez en `Ctrl+,` → *Rules for AI* → **User Rules** para que aplique a todos los proyectos que abras con este usuario de Windows.
+- **Hook programático (refuerzo sobre las reglas de texto):** [`.cursor/hooks.json`](.cursor/hooks.json) + [`.cursor/hooks/block-dangerous.js`](.cursor/hooks/block-dangerous.js). Se dispara en `beforeShellExecution`, y si el comando matchea patrones peligrosos (icacls, takeown, reg add/delete, sc create/delete, netsh advfirewall, bcdedit, diskpart, net user, schtasks, Set-MpPreference, `npm install -g`, `Start-Process -Verb RunAs`, etc.) devuelve `permission: "ask"` para que Cursor pida confirmación manual antes de ejecutar. Requiere `node` en `PATH` (ya instalado en esta máquina).
+
+**Recordatorio humano:** si en esta PC un comando falla por permisos, UAC o ExecutionPolicy, **no** le pidas al asistente que lo "arregle". Usar entorno aislado (Docker del proyecto, venv, scope usuario) o pedir al área de IT la habilitación puntual.
+
 ### Repositorio en GitHub
 
 - **Remoto `origin`:** `https://github.com/carloscostantino/barber-turnos.git`
@@ -73,7 +83,7 @@ Postgres 16 corriendo en Docker con:
   - `shop_settings` – fila `id = 1`: `booking_min_lead_hours`, `booking_max_days_ahead` (p. ej. 2 h y 15 días por defecto)
   - `business_hours` – una fila por día (`day_of_week` 0 = lunes … 6 = domingo): cerrado o rango `open_time` / `close_time`
   - `blocked_ranges` – intervalos donde no se ofrecen turnos (`starts_at`, `ends_at`, nota opcional); no se puede insertar un bloqueo si ya hay turnos activos solapados
-  - `customers` – clientes (name, phone único, email obligatorio en la reserva web; en la base puede ser null en filas antiguas)
+  - `customers` – clientes (name; `phone` único **por local** `shop_id`, no global; email obligatorio en la reserva web; en la base puede ser null en filas antiguas)
   - `appointments` – turnos, con:
     - `barber_id`, `service_id`, `customer_id`
     - `starts_at`, `ends_at`

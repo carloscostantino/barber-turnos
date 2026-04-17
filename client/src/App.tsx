@@ -4,23 +4,28 @@ import {
   NavLink,
   Outlet,
   RouterProvider,
+  useParams,
 } from 'react-router-dom'
-import { API_BASE } from './config'
+import { DEFAULT_SHOP_SLUG, shopPublicPath } from './config'
 import AdminPanel from './pages/AdminPanel'
 import BookingPage from './pages/BookingPage'
 import CancelBookingPage from './pages/CancelBookingPage'
+import HomePage from './pages/HomePage'
+import RegisterShopPage from './pages/RegisterShopPage'
 
 function NavShopBrand() {
+  const { shopSlug } = useParams()
+  const slug = shopSlug ?? DEFAULT_SHOP_SLUG
   const [label, setLabel] = useState('Barbería')
   useEffect(() => {
-    void fetch(`${API_BASE}/public-settings`)
+    void fetch(shopPublicPath(slug, 'public-settings'))
       .then((r) => (r.ok ? r.json() : null))
       .then((d: { shopName?: string | null } | null) => {
         const n = d?.shopName?.trim()
         if (n) setLabel(n)
       })
       .catch(() => {})
-  }, [])
+  }, [slug])
   return (
     <span
       className="text-slate-400 text-sm font-medium mr-2 truncate max-w-[12rem] sm:max-w-md"
@@ -39,16 +44,24 @@ const navClass = ({ isActive }: { isActive: boolean }) =>
   }`
 
 function Layout() {
+  const { shopSlug } = useParams()
+  const base = `/s/${shopSlug ?? DEFAULT_SHOP_SLUG}`
   return (
     <div className="min-h-screen bg-slate-950 text-slate-50 flex flex-col">
       <nav className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-sm sticky top-0 z-10 shrink-0">
         <div className="max-w-6xl mx-auto px-4 flex flex-wrap items-center gap-2 py-3">
+          <NavLink to="/" className={navClass} end>
+            Inicio
+          </NavLink>
           <NavShopBrand />
-          <NavLink to="/" end className={navClass}>
+          <NavLink to={base} end className={navClass}>
             Reservar
           </NavLink>
-          <NavLink to="/admin" className={navClass}>
+          <NavLink to={`${base}/admin`} className={navClass}>
             Panel admin
+          </NavLink>
+          <NavLink to="/register" className={navClass}>
+            Registrar barbería
           </NavLink>
         </div>
       </nav>
@@ -62,6 +75,14 @@ function Layout() {
 const router = createBrowserRouter([
   {
     path: '/',
+    element: <HomePage />,
+  },
+  {
+    path: '/register',
+    element: <RegisterShopPage />,
+  },
+  {
+    path: '/s/:shopSlug',
     element: <Layout />,
     children: [
       { index: true, element: <BookingPage /> },

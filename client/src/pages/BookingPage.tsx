@@ -6,7 +6,9 @@ import {
   useRef,
   useState,
 } from 'react'
-import { API_BASE } from '../config'
+import { useParams } from 'react-router-dom'
+import { DEFAULT_SHOP_SLUG, shopPublicPath } from '../config'
+import { displayTitleFromSlug } from '../lib/shopSlug'
 import { BookingDateCalendar } from '../components/BookingDateCalendar'
 import { mapsSearchUrlFromAddress, whatsappHrefFromPhone } from '../lib/contact'
 import { buildEligibleBookingDates } from '../lib/bookingEligibleDates'
@@ -203,6 +205,9 @@ function BookingContactFooter({ settings }: { settings: PublicSettings }) {
 }
 
 export default function BookingPage() {
+  const { shopSlug: shopSlugParam } = useParams()
+  const shopSlug = shopSlugParam ?? DEFAULT_SHOP_SLUG
+
   const [services, setServices] = useState<Service[]>([])
   const [publicSettings, setPublicSettings] = useState<PublicSettings | null>(
     null,
@@ -274,7 +279,9 @@ export default function BookingPage() {
         date,
       })
 
-      const res = await fetch(`${API_BASE}/availability?${params.toString()}`)
+      const res = await fetch(
+        `${shopPublicPath(shopSlug, 'availability')}?${params.toString()}`,
+      )
       if (requestId !== slotsRequestIdRef.current) return
 
       if (!res.ok) {
@@ -297,7 +304,7 @@ export default function BookingPage() {
         setLoadingSlots(false)
       }
     }
-  }, [selectedServiceId, date])
+  }, [selectedServiceId, date, shopSlug])
 
   /** Carga inicial y al cambiar servicio, fecha o reglas públicas (min/max). */
   useEffect(() => {
@@ -313,8 +320,8 @@ export default function BookingPage() {
       try {
         setError(null)
         const [sRes, cfgRes] = await Promise.all([
-          fetch(`${API_BASE}/services`),
-          fetch(`${API_BASE}/public-settings`),
+          fetch(shopPublicPath(shopSlug, 'services')),
+          fetch(shopPublicPath(shopSlug, 'public-settings')),
         ])
 
         if (!sRes.ok) {
@@ -340,7 +347,7 @@ export default function BookingPage() {
     }
 
     void fetchInitial()
-  }, [])
+  }, [shopSlug])
 
   useLayoutEffect(() => {
     if (!publicSettings) return
@@ -357,10 +364,17 @@ export default function BookingPage() {
     })
   }, [publicSettings, minDateStr, maxDateStr, eligibleDates])
 
+  const bookingTitle =
+    publicSettings?.shopName?.trim() ||
+    displayTitleFromSlug(shopSlug) ||
+    'Turnos Barbería'
+
   useEffect(() => {
-    const name = publicSettings?.shopName?.trim()
-    document.title = name ? `${name} · Reservar turno` : 'Reservar turno'
-  }, [publicSettings?.shopName])
+    document.title =
+      bookingTitle === 'Turnos Barbería'
+        ? 'Reservar turno'
+        : `${bookingTitle} · Reservar turno`
+  }, [bookingTitle])
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -409,7 +423,7 @@ export default function BookingPage() {
         notes: notes.trim() || undefined,
       }
 
-      const res = await fetch(`${API_BASE}/appointments`, {
+      const res = await fetch(shopPublicPath(shopSlug, 'appointments'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -467,7 +481,7 @@ export default function BookingPage() {
         <div className="w-full max-w-3xl mx-auto py-10 flex flex-col flex-1 min-h-[calc(100vh-3.5rem)]">
         <header className="mb-8">
           <h1 className="text-3xl font-semibold tracking-tight">
-            {publicSettings?.shopName?.trim() || 'Turnos Barbería'}
+            {bookingTitle}
           </h1>
           <p className="text-slate-400 mt-1">
             Reservá tu turno eligiendo servicio, día y horario.

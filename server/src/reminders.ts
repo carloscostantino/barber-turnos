@@ -9,15 +9,17 @@ type ReminderRow = {
   customer_email: string;
   customer_name: string;
   service_name: string;
+  shop_slug: string;
+  shop_timezone: string;
 };
 
 let running = false;
 
-function formatStartsAt(iso: Date): string {
+function formatStartsAt(iso: Date, timeZone: string): string {
   return new Intl.DateTimeFormat('es-AR', {
     dateStyle: 'full',
     timeStyle: 'short',
-    timeZone: env.TIMEZONE,
+    timeZone,
   }).format(iso);
 }
 
@@ -30,10 +32,13 @@ async function fetchReminderCandidates(): Promise<ReminderRow[]> {
       a.starts_at,
       c.email as customer_email,
       c.name as customer_name,
-      s.name as service_name
+      s.name as service_name,
+      sh.slug as shop_slug,
+      sh.timezone as shop_timezone
     from appointments a
     join customers c on c.id = a.customer_id
     join services s on s.id = a.service_id
+    join shops sh on sh.id = a.shop_id
     where a.reminder_email_sent_at is null
       and c.email is not null
       and trim(c.email) <> ''
@@ -70,12 +75,12 @@ export async function runReminderJob(): Promise<void> {
     for (const row of rows) {
       try {
         const cancelToken = signCustomerCancelToken(row.id);
-        const cancelUrl = `${env.CLIENT_ORIGIN}/cancelar?token=${encodeURIComponent(cancelToken)}`;
+        const cancelUrl = `${env.CLIENT_ORIGIN}/s/${row.shop_slug}/cancelar?token=${encodeURIComponent(cancelToken)}`;
         await sendAppointmentReminderEmail(transporter, {
           to: row.customer_email,
           customerName: row.customer_name,
           serviceName: row.service_name,
-          startsAtLabel: formatStartsAt(row.starts_at),
+          startsAtLabel: formatStartsAt(row.starts_at, row.shop_timezone),
           cancelUrl,
         });
         await markReminderSent(row.id);

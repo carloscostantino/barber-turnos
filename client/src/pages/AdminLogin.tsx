@@ -1,25 +1,43 @@
-import { useState } from 'react'
-import { API_BASE } from '../config'
+import { useEffect, useState } from 'react'
+import { API_BASE, DEFAULT_SHOP_SLUG } from '../config'
 import { setAdminToken } from '../adminToken'
 
 type Props = {
+  shopSlug: string
   onLoggedIn: () => void
 }
 
-export default function AdminLogin({ onLoggedIn }: Props) {
+export default function AdminLogin({ shopSlug, onLoggedIn }: Props) {
+  const [ownerEmail, setOwnerEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+
+  const isDemo = shopSlug === DEFAULT_SHOP_SLUG
+
+  useEffect(() => {
+    setOwnerEmail('')
+    setPassword('')
+    setError(null)
+  }, [shopSlug])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(null)
     setLoading(true)
     try {
+      const em = ownerEmail.trim()
+      const body: { password: string; shopSlug: string; ownerEmail?: string } =
+        isDemo
+          ? { password, shopSlug }
+          : em
+            ? { password, shopSlug, ownerEmail: em }
+            : { password, shopSlug }
+
       const res = await fetch(`${API_BASE}/admin/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify(body),
       })
       const data = (await res.json().catch(() => null)) as {
         token?: string
@@ -39,19 +57,54 @@ export default function AdminLogin({ onLoggedIn }: Props) {
     }
   }
 
+  const canSubmit = Boolean(password)
+
   return (
     <div className="flex justify-center px-4">
       <div className="w-full max-w-md py-16">
-        <h1 className="text-2xl font-semibold tracking-tight mb-1">
+        <h1 className="text-2xl font-semibold tracking-tight mb-6">
           Panel admin
         </h1>
-        <p className="text-slate-400 text-sm mb-8">
-          Ingresá la contraseña configurada en el servidor.
-        </p>
+        <div className="mb-6 space-y-2 text-slate-400 text-sm">
+          {isDemo ? (
+            <>
+              <p>Ingresá la contraseña</p>
+              <p>Contraseña de prueba: admin12345</p>
+            </>
+          ) : (
+            <>
+              <p>
+                Ingresá la contraseña que definiste al crear el local. Si en el futuro
+                hay más de un usuario en este local, también te pediremos el email.
+              </p>
+              <p className="text-slate-500 text-xs">
+                El email es opcional mientras seas el único dueño. Si lo dejás vacío y
+                falla el acceso, probá la contraseña global solo en entornos de
+                administración del servidor.
+              </p>
+            </>
+          )}
+        </div>
         <form
           onSubmit={(e) => void handleSubmit(e)}
           className="space-y-4 bg-slate-900/60 border border-slate-800 rounded-xl p-6"
         >
+          {!isDemo && (
+            <div className="flex flex-col gap-1">
+              <label htmlFor="admin-owner-email" className="text-sm text-slate-300">
+                Email (opcional)
+              </label>
+              <input
+                id="admin-owner-email"
+                type="email"
+                autoComplete="username"
+                value={ownerEmail}
+                onChange={(e) => setOwnerEmail(e.target.value)}
+                className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-violet-500"
+                placeholder="Solo si el local tiene más de un usuario"
+              />
+            </div>
+          )}
           <div className="flex flex-col gap-1">
             <label htmlFor="admin-password" className="text-sm text-slate-300">
               Contraseña
@@ -73,7 +126,7 @@ export default function AdminLogin({ onLoggedIn }: Props) {
           )}
           <button
             type="submit"
-            disabled={loading || !password}
+            disabled={loading || !canSubmit}
             className="w-full py-2.5 rounded bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 disabled:text-slate-400 text-sm font-medium transition-colors"
           >
             {loading ? 'Entrando...' : 'Entrar'}

@@ -7,7 +7,7 @@ test.describe('Panel admin', () => {
   test('login y listado de turnos (GET /api/appointments)', async ({
     page,
   }) => {
-    await page.goto('/admin');
+    await page.goto('/s/default/admin');
 
     if (await page.getByRole('button', { name: 'Cerrar sesión' }).isVisible()) {
       await page.getByRole('button', { name: 'Cerrar sesión' }).click();

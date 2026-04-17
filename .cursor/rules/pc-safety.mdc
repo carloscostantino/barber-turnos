@@ -1,0 +1,72 @@
+---
+description: Seguridad de la PC del trabajo; no tocar Windows ni escalar privilegios
+alwaysApply: true
+---
+
+# Seguridad de la PC (Windows corporativa)
+
+Esta PC es gestionada por la empresa. El agente NUNCA debe modificar el sistema
+ni escalar privilegios para "desbloquear" tareas. Si algo falla por permisos,
+**parar y preguntar** al usuario; jamás intentar arreglarlo tocando Windows.
+
+## Regla de oro
+
+- Si un comando falla con "Access denied", "permiso denegado", `UnauthorizedAccess`,
+  UAC, "requires administrator", o similares: DETENERSE, informar al usuario y
+  sugerir una alternativa dentro del proyecto (entorno aislado, Docker, scope usuario).
+  **Nunca** modificar permisos, políticas, ownership o elevar privilegios para superar el error.
+- No ejecutar instaladores `.msi` / `.exe` descargados de internet.
+- No ejecutar comandos con `Start-Process -Verb RunAs`, `runas`, o equivalentes.
+- Trabajar siempre dentro del workspace del proyecto (`cwd`). Si una operación
+  necesita salir de ahí, preguntar primero.
+
+## Comandos PROHIBIDOS (no usar bajo ninguna circunstancia)
+
+- Permisos NTFS / ownership: `icacls`, `cacls`, `takeown`, `Set-Acl`.
+- Registro de Windows: `reg add|delete|import`, `Set-ItemProperty` / `New-ItemProperty` /
+  `Remove-ItemProperty` sobre `HKLM:\`, `HKCU:\`, `HKCR:\`, `HKU:\`.
+- Servicios: `sc create|delete|config`, `Set-Service`, `Stop-Service` / `Start-Service`
+  sobre servicios del sistema, `New-Service`.
+- Windows Defender y seguridad: `Set-MpPreference`, `Add-MpPreference`,
+  deshabilitar protección en tiempo real, agregar exclusiones.
+- Firewall y red: `netsh advfirewall ...`, `New-NetFirewallRule`, `Set-NetFirewallRule`,
+  cambiar DNS / proxy, editar `%WINDIR%\System32\drivers\etc\hosts`.
+- Arranque y disco: `bcdedit`, `diskpart`, `Format-Volume`, `Clear-Disk`,
+  `Remove-Partition`, `format` de particiones.
+- Cuentas y grupos locales: `net user`, `net localgroup`, `New-LocalUser`,
+  `Add-LocalGroupMember`, `Remove-LocalUser`.
+- Tareas programadas y GPO: `schtasks /create|/delete|/change`,
+  `Register-ScheduledTask`, `gpedit`, `gpupdate /force`, `secedit`.
+- Drivers / features del SO: `pnputil`, `Install-WindowsFeature`,
+  `Enable-WindowsOptionalFeature`, `DISM /Online /Enable-Feature`.
+- Políticas de ejecución a nivel máquina: `Set-ExecutionPolicy Unrestricted|Bypass`
+  con `-Scope LocalMachine`.
+- Elevación: `Start-Process -Verb RunAs`, `runas`, cualquier bypass de UAC.
+- Variables de entorno de máquina: `setx /M`,
+  `[Environment]::SetEnvironmentVariable(..., 'Machine')`.
+- Escritura en rutas del sistema: `C:\Windows\`, `C:\Program Files\`,
+  `C:\Program Files (x86)\`, `C:\ProgramData\`, `%SystemRoot%\`, drivers.
+
+## Instalaciones
+
+Prohibido system-wide:
+- `msiexec /i ...`, ejecutar `.msi` / `.exe` de instalación.
+- `choco install ...`, `winget install --scope machine`.
+- `npm i -g ...`, `pip install` contra el Python del sistema,
+  `Install-Module -Scope AllUsers`.
+
+Permitido (aislado al proyecto / usuario):
+- `npm install` en el proyecto (deja `node_modules` local).
+- `python -m venv .venv` + `pip install` dentro del venv.
+- `docker compose ...` para servicios del proyecto.
+- Comandos `git` dentro del repo.
+- `winget install --scope user` o `pip install --user` SOLO si el usuario lo pide explícitamente.
+
+## Qué hacer ante problemas típicos
+
+- "No puedo instalar X porque no tengo permisos" → decirle al usuario, sugerir
+  Docker / venv / scope usuario. No pelear contra Windows.
+- "El script no corre por ExecutionPolicy" → pedir al usuario que lo habilite
+  manualmente en su sesión, no cambiarlo globalmente.
+- "Falta una variable de entorno" → exportarla solo en el shell actual o
+  escribirla en `.env` del proyecto, nunca con `setx /M`.

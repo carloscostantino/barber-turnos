@@ -6,8 +6,13 @@ import { env } from './env';
 
 const JWT_ISS = 'barber-turnos-admin';
 
-export function signAdminToken(): string {
-  return jwt.sign({ role: 'admin' }, env.JWT_SECRET, {
+export type AdminJwtPayload = {
+  role: 'admin';
+  shopId: string;
+};
+
+export function signAdminToken(shopId: string): string {
+  return jwt.sign({ role: 'admin', shopId } satisfies AdminJwtPayload, env.JWT_SECRET, {
     expiresIn: '7d',
     issuer: JWT_ISS,
   });
@@ -24,10 +29,11 @@ export const requireAdmin: RequestHandler = (req: Request, res: Response, next) 
     const payload = jwt.verify(token, env.JWT_SECRET, {
       issuer: JWT_ISS,
     }) as jwt.JwtPayload;
-    if (payload.role !== 'admin') {
+    if (payload.role !== 'admin' || typeof payload.shopId !== 'string' || !payload.shopId) {
       res.status(403).json({ error: 'prohibido' });
       return;
     }
+    (req as Request & { shopId: string }).shopId = payload.shopId;
     next();
   } catch {
     res.status(401).json({ error: 'sesión inválida o vencida' });

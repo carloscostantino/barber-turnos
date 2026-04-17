@@ -88,6 +88,24 @@ export const UpdateAppointmentAttendanceBody = z.object({
 
 export const AdminLoginBody = z.object({
   password: z.string().min(1),
+  /** Si no se envía, se usa `DEFAULT_SHOP_SLUG` del servidor. */
+  shopSlug: z.string().min(1).max(64).optional(),
+  /** Si se envía, la contraseña se valida contra `shop_users` del local (dueño). */
+  ownerEmail: z.string().email().optional(),
+});
+
+const shopSlugPattern = /^[a-z0-9][a-z0-9-]{1,48}$/;
+
+export const RegisterShopBody = z.object({
+  slug: z
+    .string()
+    .min(2)
+    .max(50)
+    .regex(shopSlugPattern, 'slug: solo minúsculas, números y guiones; 2–50 caracteres'),
+  shopName: z.string().min(2).max(120),
+  ownerEmail: z.string().email(),
+  ownerPassword: z.string().min(8).max(128),
+  timezone: z.string().min(1).max(80).optional(),
 });
 
 const timeHHMM = z.string().regex(/^\d{2}:\d{2}$/);
@@ -130,6 +148,16 @@ const shopContactAddress = z.preprocess(
   z.union([z.null(), z.string().max(500)]).optional(),
 );
 
+const shopAddressPart = z.preprocess(
+  (v) => {
+    if (v === undefined) return undefined;
+    if (v === null) return null;
+    const t = String(v).trim();
+    return t === '' ? null : t;
+  },
+  z.union([z.null(), z.string().max(200)]).optional(),
+);
+
 const shopNameField = z.preprocess(
   (v) => {
     if (v === undefined) return undefined;
@@ -147,6 +175,12 @@ export const ShopSettingsBody = z.object({
   contactWhatsapp: shopContactWhatsapp,
   contactEmail: shopContactEmail,
   contactAddress: shopContactAddress,
+  addressStreet: shopAddressPart,
+  addressNumber: shopAddressPart,
+  addressFloor: shopAddressPart,
+  addressCity: shopAddressPart,
+  addressRegion: shopAddressPart,
+  addressPostalCode: shopAddressPart,
 });
 
 export const BusinessHoursDayBody = z.object({
@@ -154,6 +188,9 @@ export const BusinessHoursDayBody = z.object({
   isClosed: z.boolean(),
   openTime: timeHHMM.nullable(),
   closeTime: timeHHMM.nullable(),
+  /** Si ambos son no-null, segundo tramo (tarde); si ambos null, un solo tramo con open/close. */
+  openTimeAfternoon: timeHHMM.nullable().optional(),
+  closeTimeAfternoon: timeHHMM.nullable().optional(),
 });
 
 export const BusinessHoursPutBody = z.array(BusinessHoursDayBody).length(7);
