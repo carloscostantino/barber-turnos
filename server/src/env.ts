@@ -35,6 +35,29 @@ const EnvSchema = z
      */
     ADMIN_PASSWORD_BCRYPT: bcryptHash.optional(),
     /**
+     * Contraseña del panel de administración del sistema (super-admin, distinto
+     * del admin por barbería). Solo para desarrollo local.
+     * Cadena vacía se trata como no definida (útil cuando Docker expone la var
+     * aunque no esté seteada en el `.env` del host).
+     */
+    SYSTEM_ADMIN_PASSWORD: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z.string().min(8).optional(),
+    ),
+    /**
+     * Hash bcrypt del super-admin del sistema (recomendado en producción).
+     * Mutuamente excluyente con `SYSTEM_ADMIN_PASSWORD`.
+     */
+    SYSTEM_ADMIN_PASSWORD_BCRYPT: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      bcryptHash.optional(),
+    ),
+    /** Email del super-admin (solo display, no cambia la autenticación). */
+    SYSTEM_ADMIN_EMAIL: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z.string().email().optional(),
+    ),
+    /**
      * Número de WhatsApp del negocio (solo dígitos, código país sin +).
      * Si está definido, el frontend puede ofrecer enlace wa.me tras reservar.
      */
@@ -63,6 +86,16 @@ const EnvSchema = z
         message:
           'Definí exactamente una de ADMIN_PASSWORD_BCRYPT (hash bcrypt) o ADMIN_PASSWORD (texto plano, p. ej. desarrollo)',
         path: ['ADMIN_PASSWORD_BCRYPT'],
+      });
+    }
+    const hasSysBcrypt = Boolean(data.SYSTEM_ADMIN_PASSWORD_BCRYPT);
+    const hasSysPlain = Boolean(data.SYSTEM_ADMIN_PASSWORD);
+    if (hasSysBcrypt && hasSysPlain) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'Definí solo una de SYSTEM_ADMIN_PASSWORD_BCRYPT o SYSTEM_ADMIN_PASSWORD (no ambas)',
+        path: ['SYSTEM_ADMIN_PASSWORD_BCRYPT'],
       });
     }
     const smtpOn = Boolean(data.SMTP_HOST);
@@ -94,5 +127,10 @@ export function isSmtpConfigured(): boolean {
       env.SMTP_PASS.length > 0 &&
       env.MAIL_FROM,
   );
+}
+
+/** `true` si hay una contraseña configurada para el panel de sistema. */
+export function isSystemAdminConfigured(): boolean {
+  return Boolean(env.SYSTEM_ADMIN_PASSWORD || env.SYSTEM_ADMIN_PASSWORD_BCRYPT);
 }
 

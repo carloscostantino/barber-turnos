@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import {
   createBrowserRouter,
+  Navigate,
   NavLink,
   Outlet,
   RouterProvider,
@@ -12,6 +13,15 @@ import BookingPage from './pages/BookingPage'
 import CancelBookingPage from './pages/CancelBookingPage'
 import HomePage from './pages/HomePage'
 import RegisterShopPage from './pages/RegisterShopPage'
+import SystemLogin from './pages/SystemLogin'
+import SystemPanel from './pages/SystemPanel'
+import { getSystemAdminToken } from './systemAdminToken'
+
+function RequireSystemAdmin({ children }: { children: ReactNode }) {
+  const token = getSystemAdminToken()
+  if (!token) return <Navigate to="/system/login" replace />
+  return <>{children}</>
+}
 
 function NavShopBrand() {
   const { shopSlug } = useParams()
@@ -80,6 +90,18 @@ const router = createBrowserRouter([
   {
     path: '/register',
     element: <RegisterShopPage />,
+  },
+  {
+    path: '/system/login',
+    element: <SystemLogin />,
+  },
+  {
+    path: '/system',
+    element: (
+      <RequireSystemAdmin>
+        <SystemPanel />
+      </RequireSystemAdmin>
+    ),
   },
   {
     path: '/s/:shopSlug',

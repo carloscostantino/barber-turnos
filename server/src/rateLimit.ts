@@ -35,3 +35,12 @@ export const demoResetRateLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'demasiados reinicios, probá más tarde' },
 });
+
+/** Anti fuerza bruta en login del panel del sistema. */
+export const systemAdminLoginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'demasiados intentos de inicio de sesión, probá más tarde' },
+});

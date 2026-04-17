@@ -1155,12 +1155,6 @@ function ConfiguracionTab({
   const [maxD, setMaxD] = useState(15)
   const [contactWa, setContactWa] = useState('')
   const [contactEmail, setContactEmail] = useState('')
-  const [addressStreet, setAddressStreet] = useState('')
-  const [addressNumber, setAddressNumber] = useState('')
-  const [addressFloor, setAddressFloor] = useState('')
-  const [addressCity, setAddressCity] = useState('')
-  const [addressRegion, setAddressRegion] = useState('')
-  const [addressPostalCode, setAddressPostalCode] = useState('')
   const [contactAddress, setContactAddress] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -1186,24 +1180,12 @@ function ConfiguracionTab({
           contactWhatsapp: string | null
           contactEmail: string | null
           contactAddress: string | null
-          addressStreet: string | null
-          addressNumber: string | null
-          addressFloor: string | null
-          addressCity: string | null
-          addressRegion: string | null
-          addressPostalCode: string | null
         }
         setShopName(d.shopName ?? '')
         setMinH(d.bookingMinLeadHours)
         setMaxD(d.bookingMaxDaysAhead)
         setContactWa(d.contactWhatsapp ?? '')
         setContactEmail(d.contactEmail ?? '')
-        setAddressStreet(d.addressStreet ?? '')
-        setAddressNumber(d.addressNumber ?? '')
-        setAddressFloor(d.addressFloor ?? '')
-        setAddressCity(d.addressCity ?? '')
-        setAddressRegion(d.addressRegion ?? '')
-        setAddressPostalCode(d.addressPostalCode ?? '')
         setContactAddress(d.contactAddress ?? '')
       } catch (e) {
         setErr(e instanceof Error ? e.message : 'Error')
@@ -1233,12 +1215,12 @@ function ConfiguracionTab({
           shopName: shopName.trim() === '' ? null : shopName.trim(),
           contactWhatsapp: contactWa.trim() === '' ? null : contactWa,
           contactEmail: contactEmail.trim() === '' ? null : contactEmail,
-          addressStreet: addressStreet.trim() === '' ? null : addressStreet,
-          addressNumber: addressNumber.trim() === '' ? null : addressNumber,
-          addressFloor: addressFloor.trim() === '' ? null : addressFloor,
-          addressCity: addressCity.trim() === '' ? null : addressCity,
-          addressRegion: addressRegion.trim() === '' ? null : addressRegion,
-          addressPostalCode: addressPostalCode.trim() === '' ? null : addressPostalCode,
+          addressStreet: null,
+          addressNumber: null,
+          addressFloor: null,
+          addressCity: null,
+          addressRegion: null,
+          addressPostalCode: null,
           contactAddress: contactAddress.trim() === '' ? null : contactAddress,
         }),
       })
@@ -1290,108 +1272,8 @@ function ConfiguracionTab({
             placeholder="Ej: Barbería Central"
           />
         </div>
-        <div className="space-y-3">
-          <p className="text-xs text-slate-500">
-            Podés cargar la dirección por partes (opcional) o en una sola línea abajo.
-            Si completás calle y ciudad, la reserva pública y el mapa usan el texto
-            armado automáticamente.
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1">
-              <label className="text-sm text-slate-300">Calle</label>
-              <input
-                type="text"
-                maxLength={200}
-                className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
-                value={addressStreet}
-                onChange={(e) => {
-                  setAddressStreet(e.target.value)
-                  touchDirty()
-                }}
-                placeholder="Ej: Av. Corrientes"
-                autoComplete="street-address"
-              />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-sm text-slate-300">Número</label>
-              <input
-                type="text"
-                maxLength={200}
-                className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
-                value={addressNumber}
-                onChange={(e) => {
-                  setAddressNumber(e.target.value)
-                  touchDirty()
-                }}
-                placeholder="1234"
-              />
-            </div>
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-sm text-slate-300">Piso / depto (opcional)</label>
-            <input
-              type="text"
-              maxLength={200}
-              className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
-              value={addressFloor}
-              onChange={(e) => {
-                setAddressFloor(e.target.value)
-                touchDirty()
-              }}
-              placeholder="3 B"
-            />
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1">
-              <label className="text-sm text-slate-300">Código postal</label>
-              <input
-                type="text"
-                maxLength={200}
-                className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
-                value={addressPostalCode}
-                onChange={(e) => {
-                  setAddressPostalCode(e.target.value)
-                  touchDirty()
-                }}
-                placeholder="C1414"
-              />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-sm text-slate-300">Ciudad / localidad</label>
-              <input
-                type="text"
-                maxLength={200}
-                className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
-                value={addressCity}
-                onChange={(e) => {
-                  setAddressCity(e.target.value)
-                  touchDirty()
-                }}
-                placeholder="CABA"
-                autoComplete="address-level2"
-              />
-            </div>
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-sm text-slate-300">Provincia / región</label>
-            <input
-              type="text"
-              maxLength={200}
-              className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
-              value={addressRegion}
-              onChange={(e) => {
-                setAddressRegion(e.target.value)
-                touchDirty()
-              }}
-              placeholder="Buenos Aires"
-              autoComplete="address-level1"
-            />
-          </div>
-        </div>
         <div className="flex flex-col gap-1">
-          <label className="text-sm text-slate-300">
-            Dirección en una línea (opcional)
-          </label>
+          <label className="text-sm text-slate-300">Dirección</label>
           <textarea
             className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm min-h-[72px] resize-y"
             value={contactAddress}
@@ -1399,13 +1281,12 @@ function ConfiguracionTab({
               setContactAddress(e.target.value)
               touchDirty()
             }}
-            placeholder="Si no usás los campos de arriba, podés escribir todo acá (ej: Av. Corrientes 1234, CABA)"
+            placeholder="Ej: Av. Corrientes 1234, CABA"
             maxLength={500}
             rows={3}
           />
           <p className="text-xs text-slate-500">
-            Aparece en la reserva pública con enlace al mapa; si hay partes
-            cargadas, se prioriza el texto compuesto.
+            Aparece en la reserva pública con enlace al mapa.
           </p>
         </div>
         <div className="flex flex-col gap-1">

@@ -22,6 +22,16 @@ git remote -v
 # origin  https://github.com/carloscostantino/barber-turnos.git (push)
 ```
 
+### Panel del sistema (super-admin)
+
+Panel separado del admin de cada barbería. Sirve para ver todas las shops registradas y cambiar su estado (`active` / `trial` / `suspended`). Cuando una shop queda en `suspended`, la reserva pública (`/s/:slug`) responde 404 y el login admin de esa shop devuelve 403.
+
+- **Habilitarlo en Docker Compose (recomendado en esta máquina):** crear un archivo `.env` en la **raíz del repo** (junto al `docker-compose.yml`) con `SYSTEM_ADMIN_PASSWORD=<tu-clave>` (texto plano, mínimo 8 caracteres) o `SYSTEM_ADMIN_PASSWORD_BCRYPT=<hash>` (producción, hash bcrypt — generable con `cd server && npm run hash-admin-password -- "tu-clave"`). Opcional: `SYSTEM_ADMIN_EMAIL=...` solo para mostrar. El `docker-compose.yml` inyecta esas variables al contenedor `api`. Aplicar cambios con `docker compose up -d --build api`. Si no se define ninguna contraseña, el panel queda deshabilitado (503). Este `.env` raíz está en `.gitignore`: **nunca se commitea**.
+- **Habilitarlo fuera de Docker (`npm run dev`):** las mismas tres variables van en `server/.env` (mirá `server/.env.example`).
+- **Acceso:** `http://localhost:5173/system/login` → contraseña → tabla con barberías (nombre, slug, estado, dueño, suscripción, turnos del mes/total, alta) y link para abrir la reserva pública de cada una. Desde el dropdown de estado podés pasar una shop a `suspended` y vuelve a `active` / `trial` cuando quieras.
+- **Endpoints backend:** `POST /api/system/login`, `GET /api/system/shops`, `PATCH /api/system/shops/:id/status`. JWT aparte con `role: 'system_admin'` (issuer `barber-turnos-system`, válido 7 días); no se mezcla con el token admin por shop (keys de `sessionStorage` distintas). El login tiene rate limit dedicado (15 intentos / 15 min por IP).
+- **Efecto de `suspended`:** las rutas públicas por slug (`/api/shops/:slug/...`, `availability`, `POST /api/appointments`, `public-settings`) responden 404, y `POST /api/admin/login` del local suspendido devuelve 403 con `"este local está suspendido, contactá a soporte"`.
+
 ---
 
 Aplicación fullstack para gestionar turnos de una **barbería con un solo operario** en la práctica: el cliente y el panel admin **no ven nombre de barbero**; la reserva usa el barbero activo en base. Incluye servicios, clientes, horario semanal, bloqueos de agenda, reglas de anticipación y rango de días, con backend Node/Express + Postgres y frontend React/Vite.
@@ -112,6 +122,16 @@ Basadas en `server/.env.example`:
   - `ADMIN_PASSWORD_BCRYPT` — hash **bcrypt** de la contraseña (recomendado en producción). Generar: `cd server && npm run hash-admin-password -- "tu-clave"` y pegar la línea que imprime en el `.env`.
 
 En **Docker Compose**, `api` usa por defecto `ADMIN_PASSWORD=admin12345` para desarrollo; en producción definí `JWT_SECRET` y preferiblemente `ADMIN_PASSWORD_BCRYPT` (sin `ADMIN_PASSWORD`) en un `.env` junto al `docker-compose.yml` o en el orquestador.
+
+#### `.env` en la raíz del repo (Docker Compose)
+
+Además del `server/.env` que usa el backend cuando corre fuera de Docker, hay un segundo archivo opcional `.env` en la **raíz del repo**. Docker Compose lo lee automáticamente para resolver las interpolaciones `${VAR:-}` del `docker-compose.yml`. Hoy se usa para las variables del **Panel del sistema**:
+
+- `SYSTEM_ADMIN_PASSWORD` — contraseña del super-admin en texto plano (desarrollo), mínimo 8 caracteres. **XOR** con la siguiente.
+- `SYSTEM_ADMIN_PASSWORD_BCRYPT` — hash bcrypt para producción (generar con `cd server && npm run hash-admin-password -- "tu-clave"`).
+- `SYSTEM_ADMIN_EMAIL` — solo para mostrar en el panel (opcional).
+
+Este archivo **no se commitea** (está en `.gitignore`). Si no existe o las variables están vacías, el panel del sistema queda deshabilitado (503 en `/api/system/*`).
 
 #### Recordatorios por email (opcional)
 
@@ -316,17 +336,28 @@ Variable opcional: **`E2E_ADMIN_PASSWORD`** — si no está definida, los tests 
 ### Estado actual del desarrollo
 
 - **Backend**
-  - Migraciones hasta `004_shop_config.js` (reglas, horario semanal, bloqueos, flags `active`).
-  - Disponibilidad y reservas alineadas con **horario de negocio**, **bloqueos**, **anticipación mínima** y **máximo de días** adelante.
-  - Un solo barbero efectivo para la web (`active`); validación de reservas en `scheduling.ts` + solapamiento en transacción.
-  - Panel admin: reglas, horarios, CRUD de servicios y bloqueos; cancelación con email opcional.
-  - Login: `ADMIN_PASSWORD` (dev) o `ADMIN_PASSWORD_BCRYPT` (producción); nunca ambas.
+  - Migraciones hasta `016_business_hours_afternoon.js` (multi-tenant `shops`, seed del demo, dirección por partes, unicidad de `phone` por shop, favoritos por shop, segundo turno en `business_hours`).
+  - Multi-tenant con columna `shop_id` en tablas editables; resolución por slug (`/s/:slug`) o `DEFAULT_SHOP_SLUG` para el demo.
+  - Disponibilidad y reservas alineadas con **horario de negocio** (con soporte opcional de segundo turno tarde), **bloqueos**, **anticipación mínima** y **máximo de días** adelante.
+  - Un solo barbero efectivo por shop; validación de reservas en `scheduling.ts` + solapamiento en transacción.
+  - Panel admin por shop: reglas, horarios (con opción "Dos turnos" y **"Aplicar a todos los días"** que respeta los días cerrados), CRUD de servicios y bloqueos, contacto del local (dirección de una sola línea), cancelación con email opcional.
+  - Login admin por shop: `ADMIN_PASSWORD` (dev) o `ADMIN_PASSWORD_BCRYPT` (producción); nunca ambas. Shops `suspended` devuelven 403 en login y 404 en rutas públicas.
+  - **Panel del sistema** (`/system`) separado, con JWT propio y contraseña vía `SYSTEM_ADMIN_PASSWORD(_BCRYPT)`; permite listar barberías y cambiar su estado (`active` / `trial` / `suspended`).
+  - **Demo reset** (`POST /api/demo/reset`): la home llama a este endpoint antes de entrar al demo para dejar el shop por defecto en su estado base (servicios, horarios, reglas, contacto, bloqueos, seed de barbero).
   - Recordatorios y cancelaciones por email según `TIMEZONE` (SMTP opcional).
+  - Stripe billing opcional (webhook + cliente) para suscripciones de shops (archivos `stripeBilling.ts`, `stripeWebhook.ts`).
 
 - **Frontend**
-  - **`/`** — Reserva: servicio, fecha (límites según API), slots, cliente; sin barbero en pantalla; WhatsApp post-reserva si aplica.
-  - **`/admin`** — Pestañas: turnos del día, reglas de reserva, horario semanal, servicios, bloqueos.
+  - **`/`** — Home con CTA "Ver demo de reservas" (resetea el shop demo antes de navegar) y "Registrar mi barbería".
+  - **`/registrar`** — Onboarding para crear una nueva shop (slug único, datos de contacto, admin inicial).
+  - **`/s/:slug`** — Reserva pública para una shop concreta; servicio, fecha (límites según API), slots, cliente; sin barbero en pantalla; WhatsApp post-reserva si aplica.
+  - **`/s/:slug/admin`** — Pestañas: turnos del día, reglas de reserva, horario semanal, servicios, bloqueos, contacto del local.
+  - **`/system/login`** + **`/system`** — Panel del super-admin (auth aparte).
   - Navegación con `react-router-dom`.
+
+- **Seguridad en la PC del trabajo**
+  - Reglas de Cursor a nivel repo (`.cursor/rules/pc-safety.mdc`) y sugerencia de User Rules globales (`docs/CURSOR_USER_RULES.md`) que prohíben al asistente tocar Windows (NTFS, registro, Defender, firewall, políticas).
+  - Hook programático `beforeShellExecution` (`.cursor/hooks.json` + `.cursor/hooks/block-dangerous.js`) que intercepta comandos peligrosos y pide confirmación manual (`permission: "ask"`).
 
 ### Próximos pasos sugeridos
 

@@ -42,6 +42,7 @@ import {
   cancelByTokenRateLimiter,
   demoResetRateLimiter,
   loginRateLimiter,
+  systemAdminLoginLimiter,
 } from './rateLimit';
 import { resetDemoShop } from './demoReset';
 import {
@@ -56,12 +57,26 @@ import {
   ServiceCreateBody,
   ServiceUpdateBody,
   ShopSettingsBody,
+  ShopStatusUpdateBody,
+  SystemAdminLoginBody,
   UpdateAppointmentAttendanceBody,
   UpdateAppointmentStatusBody,
   UUID,
   RegisterShopBody,
 } from './validation';
-import { displayTitleFromSlug, getShopById, getShopBySlug } from './shops';
+import {
+  displayTitleFromSlug,
+  getPublicShopBySlug,
+  getShopById,
+  getShopBySlug,
+  listShopsOverview,
+  updateShopStatus,
+} from './shops';
+import {
+  requireSystemAdmin,
+  signSystemAdminToken,
+  verifySystemAdminPassword,
+} from './systemAdminAuth';
 import { registerShopAndOwner } from './shopOnboarding';
 import { stripeOnboardingAfterRegistration } from './stripeBilling';
 import { composeAddressLine } from './addressFormat';
@@ -75,8 +90,8 @@ function paramStr(value: string | string[] | undefined): string {
 export const router = Router();
 
 async function sendPublicSettings(slug: string, res: import('express').Response) {
-  const shop = await getShopBySlug(slug);
-  if (!shop || shop.status === 'suspended') {
+  const shop = await getPublicShopBySlug(slug);
+  if (!shop) {
     return res.status(404).json({ error: 'local no encontrado' });
   }
   const barberId = await getSingleActiveBarberId(shop.id);
@@ -115,28 +130,28 @@ async function sendPublicSettings(slug: string, res: import('express').Response)
 }
 
 router.get('/barbers', async (_req, res) => {
-  const shop = await getShopBySlug(env.DEFAULT_SHOP_SLUG);
+  const shop = await getPublicShopBySlug(env.DEFAULT_SHOP_SLUG);
   if (!shop) return res.status(404).json({ error: 'local no encontrado' });
   const barbers = await listBarbersPublic(shop.id);
   res.json(barbers);
 });
 
 router.get('/shops/:shopSlug/barbers', async (req, res) => {
-  const shop = await getShopBySlug(paramStr(req.params.shopSlug));
+  const shop = await getPublicShopBySlug(paramStr(req.params.shopSlug));
   if (!shop) return res.status(404).json({ error: 'local no encontrado' });
   const barbers = await listBarbersPublic(shop.id);
   res.json(barbers);
 });
 
 router.get('/services', async (_req, res) => {
-  const shop = await getShopBySlug(env.DEFAULT_SHOP_SLUG);
+  const shop = await getPublicShopBySlug(env.DEFAULT_SHOP_SLUG);
   if (!shop) return res.status(404).json({ error: 'local no encontrado' });
   const services = await listServices(shop.id, true);
   res.json(services);
 });
 
 router.get('/shops/:shopSlug/services', async (req, res) => {
-  const shop = await getShopBySlug(paramStr(req.params.shopSlug));
+  const shop = await getPublicShopBySlug(paramStr(req.params.shopSlug));
   if (!shop) return res.status(404).json({ error: 'local no encontrado' });
   const services = await listServices(shop.id, true);
   res.json(services);
@@ -158,6 +173,11 @@ router.post('/admin/login', loginRateLimiter, async (req, res) => {
   const slug = parsed.data.shopSlug ?? env.DEFAULT_SHOP_SLUG;
   const shop = await getShopBySlug(slug);
   if (!shop) return res.status(404).json({ error: 'local no encontrado' });
+  if (shop.status === 'suspended') {
+    return res
+      .status(403)
+      .json({ error: 'este local está suspendido, contactá a soporte' });
+  }
 
   let ok = false;
   const emailTrim = parsed.data.ownerEmail?.trim();
@@ -284,7 +304,7 @@ router.get('/availability', async (req, res) => {
   if (!parsed.success)
     return res.status(400).json({ error: formatZodError(parsed.error) });
 
-  const shop = await getShopBySlug(env.DEFAULT_SHOP_SLUG);
+  const shop = await getPublicShopBySlug(env.DEFAULT_SHOP_SLUG);
   if (!shop) return res.status(404).json({ error: 'local no encontrado' });
 
   const barberId = await getSingleActiveBarberId(shop.id);
@@ -316,7 +336,7 @@ router.get('/shops/:shopSlug/availability', async (req, res) => {
   if (!parsed.success)
     return res.status(400).json({ error: formatZodError(parsed.error) });
 
-  const shop = await getShopBySlug(paramStr(req.params.shopSlug));
+  const shop = await getPublicShopBySlug(paramStr(req.params.shopSlug));
   if (!shop) return res.status(404).json({ error: 'local no encontrado' });
 
   const barberId = await getSingleActiveBarberId(shop.id);
@@ -352,8 +372,8 @@ async function postAppointment(
   if (!parsed.success)
     return res.status(400).json({ error: formatZodError(parsed.error) });
 
-  const shop = await getShopBySlug(shopSlug);
-  if (!shop || shop.status === 'suspended') {
+  const shop = await getPublicShopBySlug(shopSlug);
+  if (!shop) {
     return res.status(404).json({ error: 'local no encontrado' });
   }
 
@@ -739,6 +759,38 @@ router.post('/demo/reset', demoResetRateLimiter, async (_req, res) => {
     const msg = e instanceof Error ? e.message : 'error al reiniciar el demo';
     res.status(500).json({ error: msg });
   }
+});
+
+router.post('/system/login', systemAdminLoginLimiter, async (req, res) => {
+  const parsed = SystemAdminLoginBody.safeParse(req.body);
+  if (!parsed.success)
+    return res.status(400).json({ error: formatZodError(parsed.error) });
+  const ok = await verifySystemAdminPassword(parsed.data.password);
+  if (!ok) {
+    return res.status(401).json({ error: 'credenciales incorrectas' });
+  }
+  const token = signSystemAdminToken();
+  res.json({
+    token,
+    expiresInSec: 7 * 24 * 60 * 60,
+    email: env.SYSTEM_ADMIN_EMAIL ?? null,
+  });
+});
+
+router.get('/system/shops', requireSystemAdmin, async (_req, res) => {
+  const rows = await listShopsOverview();
+  res.json(rows);
+});
+
+router.patch('/system/shops/:id/status', requireSystemAdmin, async (req, res) => {
+  const idParsed = UUID.safeParse(paramStr(req.params.id));
+  if (!idParsed.success) return res.status(400).json({ error: 'id inválido' });
+  const bodyParsed = ShopStatusUpdateBody.safeParse(req.body);
+  if (!bodyParsed.success)
+    return res.status(400).json({ error: formatZodError(bodyParsed.error) });
+  const row = await updateShopStatus(idParsed.data, bodyParsed.data.status);
+  if (!row) return res.status(404).json({ error: 'local no encontrado' });
+  res.json(row);
 });
 
 router.post('/shops/register', async (req, res) => {

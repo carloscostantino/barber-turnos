@@ -94,6 +94,16 @@ export const AdminLoginBody = z.object({
   ownerEmail: z.string().email().optional(),
 });
 
+/** Login del panel del sistema (super-admin). */
+export const SystemAdminLoginBody = z.object({
+  password: z.string().min(1),
+});
+
+/** Body del PATCH que cambia el estado de una shop desde el panel del sistema. */
+export const ShopStatusUpdateBody = z.object({
+  status: z.enum(['active', 'trial', 'suspended']),
+});
+
 const shopSlugPattern = /^[a-z0-9][a-z0-9-]{1,48}$/;
 
 export const RegisterShopBody = z.object({
