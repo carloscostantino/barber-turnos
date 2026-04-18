@@ -6,10 +6,16 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e',
-  fullyParallel: true,
+  // Los tests comparten el shop demo (slug `default`): el test de Landing
+  // dispara POST /api/demo/reset al hacer click en "Ver demo de reservas",
+  // que borra y recrea servicios/horarios. Si otro test lee `/services` y
+  // luego `/availability` mientras eso ocurre, el serviceId queda obsoleto y
+  // la API responde "servicio no encontrado". Con un solo worker evitamos
+  // esa race sin tener que aislar los tests entre sí.
+  fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  workers: 1,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     // Puerto 5174 para no chocar con Docker/Vite en 5173.

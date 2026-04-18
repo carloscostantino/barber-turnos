@@ -16,10 +16,7 @@ test.describe('Disponibilidad', () => {
         r.url().includes('/public-settings') &&
         r.ok(),
     );
-    await page.goto(`/s/${DEFAULT_SLUG}`);
-    await Promise.all([servicesP, settingsP]);
-
-    const response = await page.waitForResponse(
+    const availabilityP = page.waitForResponse(
       (res) =>
         res.url().includes('/api/shops/') &&
         res.url().includes('/availability') &&
@@ -27,6 +24,11 @@ test.describe('Disponibilidad', () => {
         res.ok(),
       { timeout: 20_000 },
     );
+
+    await page.goto(`/s/${DEFAULT_SLUG}`);
+    await Promise.all([servicesP, settingsP]);
+
+    const response = await availabilityP;
 
     expect(response.status()).toBe(200);
     const data = (await response.json()) as { slots: unknown[] };
