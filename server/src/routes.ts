@@ -78,6 +78,7 @@ import {
   verifySystemAdminPassword,
 } from './systemAdminAuth';
 import { registerShopAndOwner } from './shopOnboarding';
+import { getDashboardData } from './dashboard';
 import { stripeOnboardingAfterRegistration } from './stripeBilling';
 import { composeAddressLine } from './addressFormat';
 
@@ -557,6 +558,15 @@ router.post(
 router.get('/shops/:shopSlug/admin/shop-settings', requireAdmin, async (req, res) => {
   const s = await getShopSettings(req.shopId!);
   res.json(s);
+});
+
+/**
+ * Métricas para la tab "Turnos" del panel admin (turnos hoy/semana/mes,
+ * ingresos, asistencia, clientes recurrentes).
+ */
+router.get('/shops/:shopSlug/admin/dashboard', requireAdmin, async (req, res) => {
+  const data = await getDashboardData(req.shopId!);
+  res.json(data);
 });
 
 /**

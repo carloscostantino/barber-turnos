@@ -48,6 +48,17 @@ Cada shop registrada arranca en `status = 'trial'` con una fecha de fin (`trial_
 - **Efecto de la expiración:** una shop `suspended` queda fuera de las rutas públicas (404) y el login admin del local devuelve 403 (`"este local está suspendido, contactá a soporte"`). Para reactivarla, cambiar el estado desde el [panel del sistema](#panel-del-sistema-super-admin).
 - **Backfill:** la migración `017_shop_trial_ends_at.js` agrega `trial_ends_at` y `trial_warning_sent_at` a `shops`; a las shops existentes en `trial` sin fecha les asigna `created_at + 14 días`.
 
+### Dashboard del panel admin (tab Turnos)
+
+La tab "Turnos" del admin empieza con un bloque "Resumen" de métricas del local. Todas las ventanas se calculan en la zona horaria del shop (`shops.timezone`) para que "hoy" respete el reloj local aunque el servidor corra en UTC.
+
+- **Métricas:**
+    - **Hoy / Esta semana (lun-dom) / Este mes** – turnos con `status = 'confirmed'` y suma de `services.price_cents` como ingresos estimados.
+    - **Asistencia (últimos 60 días)** – de los turnos confirmados ya pasados, cuántos quedaron marcados `attended = true` (porcentaje + ratio `attended/past`). Muestra "Todavía no hay turnos pasados" si no hay datos.
+    - **Clientes recurrentes (últimos 60 días)** – top 5 clientes con ≥ 2 turnos confirmados en la ventana, ordenados por cantidad y última visita.
+- **Endpoint:** `GET /api/shops/:slug/admin/dashboard` → `{ timezone, generatedAt, today, week, month, attendance, repeatCustomers }`.
+- **Cliente:** el componente `DashboardPanel` (en `client/src/pages/AdminPanel.tsx`) carga el endpoint al montarse la tab, ofrece botón "Refrescar" y muestra los ingresos con `formatPesosArFromCents`.
+
 ---
 
 Aplicación fullstack para gestionar turnos de una **barbería con un solo operario** en la práctica: el cliente y el panel admin **no ven nombre de barbero**; la reserva usa el barbero activo en base. Incluye servicios, clientes, horario semanal, bloqueos de agenda, reglas de anticipación y rango de días, con backend Node/Express + Postgres y frontend React/Vite.
@@ -367,7 +378,7 @@ Variable opcional: **`E2E_ADMIN_PASSWORD`** — si no está definida, los tests 
   - **`/`** — Home con CTA "Ver demo de reservas" (resetea el shop demo antes de navegar) y "Registrar mi barbería".
   - **`/registrar`** — Onboarding para crear una nueva shop (slug único, datos de contacto, admin inicial).
   - **`/s/:slug`** — Reserva pública para una shop concreta; servicio, fecha (límites según API), slots, cliente; sin barbero en pantalla; WhatsApp post-reserva si aplica.
-  - **`/s/:slug/admin`** — Pestañas: turnos del día, reglas de reserva, horario semanal, servicios, bloqueos, contacto del local.
+  - **`/s/:slug/admin`** — Pestañas: turnos del día (con **dashboard superior**: turnos/ingresos de hoy, semana y mes + asistencia de los últimos 60 días + top de clientes recurrentes), reglas de reserva, horario semanal, servicios, bloqueos, contacto del local.
   - **`/system/login`** + **`/system`** — Panel del super-admin (auth aparte).
   - Navegación con `react-router-dom`.
 

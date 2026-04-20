@@ -628,6 +628,7 @@ function AdminAuthenticatedPanel({
 
         {tab === 'turnos' && (
           <>
+            <DashboardPanel authHeader={authHeader} shopSlug={shopSlug} />
             <div className="flex flex-wrap gap-2 items-center mb-4">
               <span className="text-sm text-slate-500">Vista</span>
               <button
@@ -2740,5 +2741,203 @@ function ActionButtons({
         </button>
       )}
     </div>
+  )
+}
+
+type DashboardResponse = {
+  timezone: string
+  generatedAt: string
+  today: { appointments: number; revenueCents: number }
+  week: { appointments: number; revenueCents: number }
+  month: { appointments: number; revenueCents: number }
+  attendance: { past: number; attended: number; ratePct: number | null }
+  repeatCustomers: Array<{
+    customerId: string
+    name: string
+    phone: string | null
+    email: string | null
+    totalAppointments: number
+    lastAppointmentAt: string
+  }>
+}
+
+/**
+ * Tarjetas con métricas del negocio (turnos confirmados hoy/semana/mes + ingresos estimados,
+ * asistencia de los últimos 60 días y top de clientes recurrentes). Se monta encima de la
+ * lista de turnos en la tab "Turnos".
+ */
+function DashboardPanel({
+  authHeader,
+  shopSlug,
+}: {
+  authHeader: Record<string, string>
+  shopSlug: string
+}) {
+  const [data, setData] = useState<DashboardResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(shopAdminPath(shopSlug, 'dashboard'), {
+        headers: authHeader,
+      })
+      if (res.status === 401) {
+        reloadToLogin()
+        return
+      }
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as {
+          error?: string
+        } | null
+        throw new Error(body?.error ?? 'No se pudo cargar el resumen')
+      }
+      setData((await res.json()) as DashboardResponse)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error')
+    } finally {
+      setLoading(false)
+    }
+  }, [authHeader, shopSlug])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const Card = ({
+    title,
+    appointments,
+    revenueCents,
+  }: {
+    title: string
+    appointments: number
+    revenueCents: number
+  }) => (
+    <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-4">
+      <div className="text-xs uppercase tracking-wide text-slate-500">
+        {title}
+      </div>
+      <div className="mt-1 flex items-baseline gap-2">
+        <span className="text-2xl font-semibold text-slate-100 tabular-nums">
+          {appointments}
+        </span>
+        <span className="text-xs text-slate-500">
+          turno{appointments === 1 ? '' : 's'}
+        </span>
+      </div>
+      <div className="mt-0.5 text-sm text-emerald-300 tabular-nums">
+        {formatPesosArFromCents(revenueCents)}
+      </div>
+    </div>
+  )
+
+  return (
+    <section
+      aria-label="Resumen del local"
+      className="mb-6 rounded-xl border border-slate-800 bg-slate-900/20 p-4"
+    >
+      <div className="flex items-center gap-3 mb-3">
+        <h2 className="text-sm font-semibold text-slate-200">Resumen</h2>
+        <button
+          type="button"
+          onClick={() => void load()}
+          disabled={loading}
+          className="text-xs text-slate-400 hover:text-slate-200 disabled:opacity-50"
+        >
+          {loading ? 'Actualizando…' : 'Refrescar'}
+        </button>
+        {error && (
+          <span className="text-xs text-red-400 ml-auto">{error}</span>
+        )}
+      </div>
+
+      {data ? (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <Card
+              title="Hoy"
+              appointments={data.today.appointments}
+              revenueCents={data.today.revenueCents}
+            />
+            <Card
+              title="Esta semana"
+              appointments={data.week.appointments}
+              revenueCents={data.week.revenueCents}
+            />
+            <Card
+              title="Este mes"
+              appointments={data.month.appointments}
+              revenueCents={data.month.revenueCents}
+            />
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-4">
+              <div className="text-xs uppercase tracking-wide text-slate-500">
+                Asistencia (últimos 60 días)
+              </div>
+              {data.attendance.past === 0 ? (
+                <p className="mt-2 text-sm text-slate-400">
+                  Todavía no hay turnos pasados.
+                </p>
+              ) : (
+                <>
+                  <div className="mt-1 flex items-baseline gap-2">
+                    <span className="text-2xl font-semibold text-slate-100 tabular-nums">
+                      {data.attendance.ratePct}%
+                    </span>
+                    <span className="text-xs text-slate-500">
+                      {data.attendance.attended} / {data.attendance.past}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Turnos confirmados marcados como "asistió" sobre el total
+                    de turnos pasados.
+                  </p>
+                </>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-4">
+              <div className="text-xs uppercase tracking-wide text-slate-500">
+                Clientes recurrentes (últimos 60 días)
+              </div>
+              {data.repeatCustomers.length === 0 ? (
+                <p className="mt-2 text-sm text-slate-400">
+                  Sin clientes con 2 o más turnos en los últimos 60 días.
+                </p>
+              ) : (
+                <ul className="mt-2 divide-y divide-slate-800">
+                  {data.repeatCustomers.map((c) => (
+                    <li
+                      key={c.customerId}
+                      className="py-2 flex items-center justify-between gap-3 text-sm"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate text-slate-100">{c.name}</div>
+                        {(c.phone || c.email) && (
+                          <div className="truncate text-xs text-slate-500">
+                            {c.phone ?? c.email}
+                          </div>
+                        )}
+                      </div>
+                      <span className="shrink-0 rounded-full border border-slate-700 px-2 py-0.5 text-xs text-slate-300">
+                        {c.totalAppointments} turnos
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </>
+      ) : (
+        !error && (
+          <p className="text-sm text-slate-500">Cargando métricas…</p>
+        )
+      )}
+    </section>
   )
 }

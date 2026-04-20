@@ -1,0 +1,15 @@
+feat(admin): dashboard con turnos/ingresos, asistencia y clientes recurrentes
+
+- server/src/dashboard.ts: calcula ventanas hoy/semana/mes en la zona horaria
+  del shop (luxon), ingresos estimados por suma de services.price_cents,
+  asistencia (attended/past en últimos 60 días) y top 5 clientes recurrentes
+  con >= 2 turnos en los últimos 60 días.
+- GET /api/shops/:slug/admin/dashboard protegido por requireAdmin.
+- client AdminPanel: nuevo componente DashboardPanel montado encima de la
+  lista en la tab Turnos, con tarjetas por ventana, panel de asistencia y
+  lista de clientes recurrentes. Botón "Refrescar".
+- E2E dashboard.spec.ts: contrato del endpoint + verificación de UI
+  ("Resumen", "Hoy", "Esta semana", "Este mes", "Asistencia",
+  "Clientes recurrentes").
+- README: nueva sección "Dashboard del panel admin (tab Turnos)" y mención
+  en la descripción de /s/:slug/admin.
