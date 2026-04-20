@@ -1,5 +1,6 @@
 import bcrypt from 'bcrypt';
 import { pool } from './db';
+import { env } from './env';
 import { insertShop } from './shops';
 
 /** Datos iniciales para un shop recién creado (barbero, servicios, horario, reglas). */
@@ -87,11 +88,15 @@ export async function registerShopAndOwner(data: {
   ownerPassword: string;
   timezone?: string;
 }): Promise<{ shopId: string; slug: string }> {
+  const trialEndsAt = new Date(
+    Date.now() + env.TRIAL_DURATION_DAYS * 24 * 60 * 60 * 1000,
+  );
   const shop = await insertShop({
     slug: data.slug,
     name: data.shopName,
     timezone: data.timezone,
     status: 'trial',
+    trialEndsAt,
   });
   try {
     await seedShopContent(shop.id, { shopDisplayName: data.shopName });

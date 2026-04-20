@@ -289,6 +289,11 @@ function AdminAuthenticatedPanel({
     string | null
   >(null)
   const [shopName, setShopName] = useState<string | null>(null)
+  const [trialStatus, setTrialStatus] = useState<{
+    status: 'active' | 'trial' | 'suspended'
+    trialEndsAt: string | null
+    daysLeft: number | null
+  } | null>(null)
 
   const authHeader = useMemo(
     () => ({ Authorization: `Bearer ${token}` }),
@@ -313,6 +318,34 @@ function AdminAuthenticatedPanel({
       cancelled = true
     }
   }, [shopSlug])
+
+  /** Estado del trial para el banner "tu prueba termina en N días". */
+  useEffect(() => {
+    let cancelled = false
+    setTrialStatus(null)
+    fetch(shopAdminPath(shopSlug, 'trial-status'), { headers: authHeader })
+      .then((r) => (r.ok ? r.json() : null))
+      .then(
+        (
+          d:
+            | {
+                status: 'active' | 'trial' | 'suspended'
+                trialEndsAt: string | null
+                daysLeft: number | null
+              }
+            | null,
+        ) => {
+          if (cancelled || !d) return
+          setTrialStatus(d)
+        },
+      )
+      .catch(() => {
+        /* silencioso: banner no es crítico */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [shopSlug, authHeader])
 
   const navigate = useNavigate()
   const location = useLocation()
@@ -561,6 +594,29 @@ function AdminAuthenticatedPanel({
             Cerrar sesión
           </button>
         </header>
+
+        {trialStatus?.status === 'trial' && trialStatus.daysLeft != null && (
+          <div
+            role="status"
+            className={`mb-6 rounded-lg border px-4 py-3 text-sm ${
+              trialStatus.daysLeft <= 3
+                ? 'border-amber-700 bg-amber-950/40 text-amber-200'
+                : 'border-slate-700 bg-slate-900/60 text-slate-200'
+            }`}
+          >
+            <div className="font-semibold">
+              {trialStatus.daysLeft === 0
+                ? 'Tu período de prueba termina hoy'
+                : trialStatus.daysLeft === 1
+                  ? 'Tu período de prueba termina mañana'
+                  : `Tu período de prueba termina en ${trialStatus.daysLeft} días`}
+            </div>
+            <div className="text-xs text-slate-400 mt-0.5">
+              Cuando se venza, el local quedará suspendido y las reservas
+              públicas se pausarán hasta activar una suscripción.
+            </div>
+          </div>
+        )}
 
         <div className="flex flex-wrap gap-2 mb-6">
           {tabBtn('turnos', 'Turnos')}

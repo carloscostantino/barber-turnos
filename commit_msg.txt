@@ -1,0 +1,14 @@
+﻿feat(trial): suspensión automática de trials vencidos + aviso por email
+
+- Migración 017: agrega shops.trial_ends_at y shops.trial_warning_sent_at,
+  con back-fill de created_at + 14 días para shops existentes en trial.
+- shopOnboarding: al registrar un shop, setea trialEndsAt = now()+TRIAL_DURATION_DAYS.
+- trialJob.ts: job periódico que (1) pasa a 'suspended' los trials vencidos
+  y (2) envía email al owner cuando quedan ≤ TRIAL_WARNING_DAYS (una única vez).
+- env: TRIAL_DURATION_DAYS (14), TRIAL_WARNING_DAYS (3), TRIAL_JOB_HOURS (6).
+- API: GET /api/shops/:slug/admin/trial-status para el banner.
+- UI admin: banner "tu prueba termina en N días" con nivel ámbar si <=3.
+- UI panel del sistema: muestra días restantes de trial en la columna Estado.
+- E2E trial.spec.ts: cubre shop recién registrada (trial, daysLeft~14),
+  shop default activa (daysLeft=null) y suspender → login admin 403.
+- README: nueva sección "Período de prueba (trial → suspended automático)".

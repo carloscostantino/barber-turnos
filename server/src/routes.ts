@@ -559,6 +559,28 @@ router.get('/shops/:shopSlug/admin/shop-settings', requireAdmin, async (req, res
   res.json(s);
 });
 
+/**
+ * Estado de la suscripción/prueba del local, para mostrar el banner en el
+ * panel admin. Respuesta:
+ *   - `status`: 'active' | 'trial' | 'suspended'
+ *   - `trialEndsAt`: ISO | null (fecha en que vence la prueba, si aplica)
+ *   - `daysLeft`: entero ≥ 0 o null (días enteros que faltan; 0 = expira hoy)
+ */
+router.get('/shops/:shopSlug/admin/trial-status', requireAdmin, async (req, res) => {
+  const shop = await getShopBySlug(paramStr(req.params.shopSlug));
+  if (!shop) return res.status(404).json({ error: 'local no encontrado' });
+  let daysLeft: number | null = null;
+  if (shop.trialEndsAt) {
+    const ms = new Date(shop.trialEndsAt).getTime() - Date.now();
+    daysLeft = Math.max(0, Math.ceil(ms / (24 * 60 * 60 * 1000)));
+  }
+  res.json({
+    status: shop.status,
+    trialEndsAt: shop.trialEndsAt ?? null,
+    daysLeft,
+  });
+});
+
 router.put('/shops/:shopSlug/admin/shop-settings', requireAdmin, async (req, res) => {
   const parsed = ShopSettingsBody.safeParse(req.body);
   if (!parsed.success)

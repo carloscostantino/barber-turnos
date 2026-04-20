@@ -33,6 +33,21 @@ Panel separado del admin de cada barbería. Sirve para ver todas las shops regis
 - **Efecto de `suspended`:** las rutas públicas por slug (`/api/shops/:slug/...`, `availability`, `POST /api/appointments`, `public-settings`) responden 404, y `POST /api/shops/:slug/admin/login` del local suspendido devuelve 403 con `"este local está suspendido, contactá a soporte"`.
 - **Aislamiento entre locales (multi-tenant):** todas las rutas del panel admin viven bajo `/api/shops/:slug/admin/...` y el middleware `requireAdmin` valida que el `shopId` del JWT coincida con el local identificado por el `slug` de la URL. Si un admin intenta usar un token emitido para la shop A contra `/shops/B/admin/...`, el servidor responde **403** con `"este token no corresponde a este local"`. El cliente guarda el `shopSlug` junto con el JWT en `sessionStorage` (`barber_turnos_admin_jwt` + `barber_turnos_admin_slug`) y, si detecta que la URL pide otro local, fuerza logout antes de hacer requests.
 
+### Período de prueba (trial → suspended automático)
+
+Cada shop registrada arranca en `status = 'trial'` con una fecha de fin (`trial_ends_at`). Un job periódico suspende automáticamente las que vencieron, y les envía un aviso por email a las que están por vencer (si hay SMTP configurado).
+
+- **Duración y frecuencias (variables de entorno):**
+    - `TRIAL_DURATION_DAYS` – días de prueba al registrar (default `14`).
+    - `TRIAL_WARNING_DAYS` – cuando faltan ≤ este número de días, se envía un aviso por email al owner, **una sola vez** (default `3`).
+    - `TRIAL_JOB_HOURS` – cada cuántas horas corre el job (default `6`). El primer tick se dispara al arrancar el servidor.
+- **Qué hace el job (`server/src/trialJob.ts`):**
+    - `update shops set status='suspended' where status='trial' and trial_ends_at <= now()`.
+    - Para shops con `trial_ends_at` dentro de la ventana de aviso, envía el mail de "tu prueba termina en N días" y marca `trial_warning_sent_at`.
+- **API admin:** `GET /api/shops/:slug/admin/trial-status` responde `{ status, trialEndsAt, daysLeft }`. El cliente lo consulta al entrar al panel y muestra un banner cuando el local está en `trial`; si `daysLeft ≤ 3` el banner pasa a color ámbar.
+- **Efecto de la expiración:** una shop `suspended` queda fuera de las rutas públicas (404) y el login admin del local devuelve 403 (`"este local está suspendido, contactá a soporte"`). Para reactivarla, cambiar el estado desde el [panel del sistema](#panel-del-sistema-super-admin).
+- **Backfill:** la migración `017_shop_trial_ends_at.js` agrega `trial_ends_at` y `trial_warning_sent_at` a `shops`; a las shops existentes en `trial` sin fecha les asigna `created_at + 14 días`.
+
 ---
 
 Aplicación fullstack para gestionar turnos de una **barbería con un solo operario** en la práctica: el cliente y el panel admin **no ven nombre de barbero**; la reserva usa el barbero activo en base. Incluye servicios, clientes, horario semanal, bloqueos de agenda, reglas de anticipación y rango de días, con backend Node/Express + Postgres y frontend React/Vite.

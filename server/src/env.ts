@@ -76,6 +76,12 @@ const EnvSchema = z
     REMINDER_HOURS_BEFORE: z.coerce.number().positive().default(24),
     /** Cada cuántos minutos se evalúan candidatos a recordatorio. */
     REMINDER_POLL_MINUTES: z.coerce.number().int().positive().max(120).default(15),
+    /** Días de prueba al registrar un shop (status='trial'). */
+    TRIAL_DURATION_DAYS: z.coerce.number().int().positive().max(365).default(14),
+    /** Cuando faltan ≤ este número de días para el fin del trial, se envía un aviso por email al owner. */
+    TRIAL_WARNING_DAYS: z.coerce.number().int().nonnegative().max(30).default(3),
+    /** Cada cuántas horas corre el job que suspende trials vencidos y envía avisos. */
+    TRIAL_JOB_HOURS: z.coerce.number().positive().max(24).default(6),
   })
   .superRefine((data, ctx) => {
     const hasBcrypt = Boolean(data.ADMIN_PASSWORD_BCRYPT);

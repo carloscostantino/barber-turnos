@@ -4,6 +4,7 @@ import { env } from './env';
 import { pool } from './db';
 import { router } from './routes';
 import { startReminderScheduler } from './reminders';
+import { startTrialScheduler } from './trialJob';
 import { handleStripeWebhook } from './stripeWebhook';
 
 const app = express();
@@ -36,5 +37,6 @@ app.listen(env.PORT, '0.0.0.0', () => {
   // eslint-disable-next-line no-console
   console.log(`API escuchando en http://0.0.0.0:${env.PORT}`);
   startReminderScheduler();
+  startTrialScheduler();
 });
 

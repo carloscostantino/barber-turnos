@@ -8,6 +8,8 @@ export type ShopRow = {
   name: string;
   timezone: string;
   status: ShopStatus;
+  /** Fecha ISO de fin de prueba; `null` si no aplica (shops no-trial o sin fecha). */
+  trialEndsAt?: string | null;
 };
 
 export type ShopOverviewRow = {
@@ -17,6 +19,7 @@ export type ShopOverviewRow = {
   status: ShopStatus;
   timezone: string;
   created_at: string;
+  trial_ends_at: string | null;
   owner_email: string | null;
   subscription_status: string | null;
   subscription_provider: string | null;
@@ -36,14 +39,35 @@ export function displayTitleFromSlug(slug: string): string {
     .join(' ');
 }
 
+type ShopDbRow = {
+  id: string;
+  slug: string;
+  name: string;
+  timezone: string;
+  status: string;
+  trial_ends_at: Date | null;
+};
+
+function mapShopRow(row: ShopDbRow): ShopRow {
+  return {
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    timezone: row.timezone,
+    status: row.status as ShopStatus,
+    trialEndsAt: row.trial_ends_at ? row.trial_ends_at.toISOString() : null,
+  };
+}
+
 export async function getShopBySlug(slug: string): Promise<ShopRow | null> {
-  const r = await pool.query<ShopRow>(
-    `select id, slug, name, timezone, status::text as status from shops where lower(slug) = lower($1) limit 1`,
+  const r = await pool.query<ShopDbRow>(
+    `select id, slug, name, timezone, status::text as status, trial_ends_at
+       from shops where lower(slug) = lower($1) limit 1`,
     [slug.trim()],
   );
   const row = r.rows[0];
   if (!row) return null;
-  return row;
+  return mapShopRow(row);
 }
 
 /**
@@ -58,11 +82,13 @@ export async function getPublicShopBySlug(slug: string): Promise<ShopRow | null>
 }
 
 export async function getShopById(id: string): Promise<ShopRow | null> {
-  const r = await pool.query<ShopRow>(
-    `select id, slug, name, timezone, status::text as status from shops where id = $1`,
+  const r = await pool.query<ShopDbRow>(
+    `select id, slug, name, timezone, status::text as status, trial_ends_at
+       from shops where id = $1`,
     [id],
   );
-  return r.rows[0] ?? null;
+  const row = r.rows[0];
+  return row ? mapShopRow(row) : null;
 }
 
 export async function listShopsOverview(): Promise<ShopOverviewRow[]> {
@@ -73,6 +99,7 @@ export async function listShopsOverview(): Promise<ShopOverviewRow[]> {
     status: string;
     timezone: string;
     created_at: Date;
+    trial_ends_at: Date | null;
     owner_email: string | null;
     subscription_status: string | null;
     subscription_provider: string | null;
@@ -87,6 +114,7 @@ export async function listShopsOverview(): Promise<ShopOverviewRow[]> {
        s.status::text as status,
        s.timezone,
        s.created_at,
+       s.trial_ends_at,
        (
          select email
          from shop_users su
@@ -115,6 +143,7 @@ export async function listShopsOverview(): Promise<ShopOverviewRow[]> {
     status: row.status as ShopStatus,
     timezone: row.timezone,
     created_at: row.created_at.toISOString(),
+    trial_ends_at: row.trial_ends_at ? row.trial_ends_at.toISOString() : null,
     owner_email: row.owner_email,
     subscription_status: row.subscription_status,
     subscription_provider: row.subscription_provider,
@@ -130,13 +159,14 @@ export async function updateShopStatus(
   shopId: string,
   status: ShopStatus,
 ): Promise<ShopRow | null> {
-  const r = await pool.query<ShopRow>(
+  const r = await pool.query<ShopDbRow>(
     `update shops set status = $2
      where id = $1
-     returning id, slug, name, timezone, status::text as status`,
+     returning id, slug, name, timezone, status::text as status, trial_ends_at`,
     [shopId, status],
   );
-  return r.rows[0] ?? null;
+  const row = r.rows[0];
+  return row ? mapShopRow(row) : null;
 }
 
 export async function insertShop(data: {
@@ -144,17 +174,20 @@ export async function insertShop(data: {
   name: string;
   timezone?: string;
   status?: ShopStatus;
+  /** Fecha de fin del trial. Si `undefined`, la columna queda en null. */
+  trialEndsAt?: Date | null;
 }): Promise<ShopRow> {
-  const r = await pool.query<ShopRow>(
-    `insert into shops (slug, name, timezone, status)
-     values ($1, $2, coalesce($3, 'America/Argentina/Buenos_Aires'), $4)
-     returning id, slug, name, timezone, status::text as status`,
+  const r = await pool.query<ShopDbRow>(
+    `insert into shops (slug, name, timezone, status, trial_ends_at)
+     values ($1, $2, coalesce($3, 'America/Argentina/Buenos_Aires'), $4, $5)
+     returning id, slug, name, timezone, status::text as status, trial_ends_at`,
     [
       data.slug.trim(),
       data.name.trim(),
       data.timezone ?? 'America/Argentina/Buenos_Aires',
       data.status ?? 'trial',
+      data.trialEndsAt ?? null,
     ],
   );
-  return r.rows[0]!;
+  return mapShopRow(r.rows[0]!);
 }

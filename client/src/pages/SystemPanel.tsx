@@ -15,12 +15,24 @@ type ShopOverview = {
   status: ShopStatus
   timezone: string
   created_at: string
+  trial_ends_at: string | null
   owner_email: string | null
   subscription_status: string | null
   subscription_provider: string | null
   current_period_end: string | null
   total_appointments: number
   appointments_this_month: number
+}
+
+const trialBadge = (trialEndsAt: string | null): string | null => {
+  if (!trialEndsAt) return null
+  const ms = new Date(trialEndsAt).getTime() - Date.now()
+  if (Number.isNaN(ms)) return null
+  const days = Math.ceil(ms / (24 * 60 * 60 * 1000))
+  if (days < 0) return `vencido hace ${Math.abs(days)} d`
+  if (days === 0) return 'vence hoy'
+  if (days === 1) return '1 día'
+  return `${days} días`
 }
 
 const STATUS_OPTIONS: Array<{ value: ShopStatus; label: string }> = [
@@ -250,6 +262,11 @@ export default function SystemPanel() {
                       >
                         {STATUS_OPTIONS.find((o) => o.value === shop.status)?.label ?? shop.status}
                       </span>
+                      {shop.status === 'trial' && trialBadge(shop.trial_ends_at) && (
+                        <span className="text-[11px] text-amber-400">
+                          Prueba: {trialBadge(shop.trial_ends_at)}
+                        </span>
+                      )}
                       <select
                         value={shop.status}
                         disabled={updatingId === shop.id}
