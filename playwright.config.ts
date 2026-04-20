@@ -40,6 +40,13 @@ export default defineConfig({
         process.env.ADMIN_PASSWORD ||
         process.env.E2E_ADMIN_PASSWORD ||
         'admin12345',
+      // Habilitamos el panel del sistema en E2E con una password conocida
+      // para poder testear login + suspend/unsuspend sin depender del `.env`
+      // real del equipo de quien corre los tests.
+      SYSTEM_ADMIN_PASSWORD:
+        process.env.SYSTEM_ADMIN_PASSWORD ||
+        process.env.E2E_SYSTEM_ADMIN_PASSWORD ||
+        'e2e-system-admin-pass',
     },
     reuseExistingServer: process.env.PW_TEST_REUSE_SERVER === '1',
     timeout: 180_000,

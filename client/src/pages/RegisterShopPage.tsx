@@ -165,8 +165,11 @@ export default function RegisterShopPage() {
       </p>
       <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
         <div>
-          <label className="text-sm text-slate-300">Nombre del local</label>
+          <label htmlFor="register-shop-name" className="text-sm text-slate-300">
+            Nombre del local
+          </label>
           <input
+            id="register-shop-name"
             className="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
             value={shopName}
             onChange={(e) => setShopName(e.target.value)}
@@ -176,8 +179,11 @@ export default function RegisterShopPage() {
           />
         </div>
         <div>
-          <label className="text-sm text-slate-300">Identificador (URL)</label>
+          <label htmlFor="register-shop-slug" className="text-sm text-slate-300">
+            Identificador (URL)
+          </label>
           <input
+            id="register-shop-slug"
             className="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
             value={slug}
             onChange={(e) => {
@@ -193,8 +199,11 @@ export default function RegisterShopPage() {
           />
         </div>
         <div>
-          <label className="text-sm text-slate-300">Tu email (dueño)</label>
+          <label htmlFor="register-owner-email" className="text-sm text-slate-300">
+            Tu email (dueño)
+          </label>
           <input
+            id="register-owner-email"
             type="email"
             className="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
             value={ownerEmail}
@@ -203,8 +212,11 @@ export default function RegisterShopPage() {
           />
         </div>
         <div>
-          <label className="text-sm text-slate-300">Contraseña</label>
+          <label htmlFor="register-owner-password" className="text-sm text-slate-300">
+            Contraseña
+          </label>
           <input
+            id="register-owner-password"
             type="password"
             className="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
             value={ownerPassword}
