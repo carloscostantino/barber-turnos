@@ -4,7 +4,7 @@ const ADMIN_PASSWORD =
   process.env.E2E_ADMIN_PASSWORD ?? 'admin12345';
 
 test.describe('Panel admin', () => {
-  test('login y listado de turnos (GET /api/appointments)', async ({
+  test('login y listado de turnos (GET /api/shops/:slug/admin/appointments)', async ({
     page,
   }) => {
     await page.goto('/s/default/admin');
@@ -23,9 +23,11 @@ test.describe('Panel admin', () => {
 
     await expect(loginTitle).toBeVisible({ timeout: 15_000 });
 
+    // Las rutas admin ahora cuelgan de /api/shops/:slug/admin/... para que el
+    // middleware server-side valide que el JWT corresponde a la shop de la URL.
     const appointmentsWait = page.waitForResponse(
       (res) =>
-        res.url().includes('/api/appointments') &&
+        /\/api\/shops\/default\/admin\/appointments/.test(res.url()) &&
         res.request().method() === 'GET' &&
         res.ok(),
     );

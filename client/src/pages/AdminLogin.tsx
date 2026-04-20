@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { API_BASE, DEFAULT_SHOP_SLUG, shopPublicPath } from '../config'
-import { setAdminToken } from '../adminToken'
+import { DEFAULT_SHOP_SLUG, shopAdminPath, shopPublicPath } from '../config'
+import { setAdminSession } from '../adminToken'
 
 type Props = {
   shopSlug: string
@@ -46,14 +46,10 @@ export default function AdminLogin({ shopSlug, onLoggedIn }: Props) {
     setLoading(true)
     try {
       const em = ownerEmail.trim()
-      const body: { password: string; shopSlug: string; ownerEmail?: string } =
-        isDemo
-          ? { password, shopSlug }
-          : em
-            ? { password, shopSlug, ownerEmail: em }
-            : { password, shopSlug }
+      const body: { password: string; ownerEmail?: string } =
+        isDemo || !em ? { password } : { password, ownerEmail: em }
 
-      const res = await fetch(`${API_BASE}/admin/login`, {
+      const res = await fetch(shopAdminPath(shopSlug, 'login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -66,7 +62,7 @@ export default function AdminLogin({ shopSlug, onLoggedIn }: Props) {
         throw new Error(data?.error ?? 'No se pudo iniciar sesión')
       }
       if (!data?.token) throw new Error('Respuesta inválida del servidor')
-      setAdminToken(data.token)
+      setAdminSession({ token: data.token, shopSlug })
       setPassword('')
       onLoggedIn()
     } catch (err) {

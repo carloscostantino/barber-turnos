@@ -30,7 +30,8 @@ Panel separado del admin de cada barbería. Sirve para ver todas las shops regis
 - **Habilitarlo fuera de Docker (`npm run dev`):** las mismas tres variables van en `server/.env` (mirá `server/.env.example`).
 - **Acceso:** `http://localhost:5173/system/login` → contraseña → tabla con barberías (nombre, slug, estado, dueño, suscripción, turnos del mes/total, alta) y link para abrir la reserva pública de cada una. Desde el dropdown de estado podés pasar una shop a `suspended` y vuelve a `active` / `trial` cuando quieras.
 - **Endpoints backend:** `POST /api/system/login`, `GET /api/system/shops`, `PATCH /api/system/shops/:id/status`. JWT aparte con `role: 'system_admin'` (issuer `barber-turnos-system`, válido 7 días); no se mezcla con el token admin por shop (keys de `sessionStorage` distintas). El login tiene rate limit dedicado (15 intentos / 15 min por IP).
-- **Efecto de `suspended`:** las rutas públicas por slug (`/api/shops/:slug/...`, `availability`, `POST /api/appointments`, `public-settings`) responden 404, y `POST /api/admin/login` del local suspendido devuelve 403 con `"este local está suspendido, contactá a soporte"`.
+- **Efecto de `suspended`:** las rutas públicas por slug (`/api/shops/:slug/...`, `availability`, `POST /api/appointments`, `public-settings`) responden 404, y `POST /api/shops/:slug/admin/login` del local suspendido devuelve 403 con `"este local está suspendido, contactá a soporte"`.
+- **Aislamiento entre locales (multi-tenant):** todas las rutas del panel admin viven bajo `/api/shops/:slug/admin/...` y el middleware `requireAdmin` valida que el `shopId` del JWT coincida con el local identificado por el `slug` de la URL. Si un admin intenta usar un token emitido para la shop A contra `/shops/B/admin/...`, el servidor responde **403** con `"este token no corresponde a este local"`. El cliente guarda el `shopSlug` junto con el JWT en `sessionStorage` (`barber_turnos_admin_jwt` + `barber_turnos_admin_slug`) y, si detecta que la URL pide otro local, fuerza logout antes de hacer requests.
 
 ---
 
@@ -175,38 +176,38 @@ Todos los endpoints de negocio están colgados bajo `/api`.
     - Si no hay barbero activo: **503**.
 
 - **Panel admin (auth)**
-  - `POST /api/admin/login`  
-    - Body: `{ "password": "<contraseña en texto plano>" }` (la misma que configuraste como `ADMIN_PASSWORD` o la que usaste para generar `ADMIN_PASSWORD_BCRYPT`).  
-    - Respuesta OK: `{ "token": "<jwt>", "expiresInSec": 604800 }` (7 días).  
-    - El cliente guarda el token en `sessionStorage` y lo envía como `Authorization: Bearer <token>` en las rutas protegidas.
+  - `POST /api/shops/:slug/admin/login`  
+    - Body: `{ "password": "<contraseña en texto plano>", "ownerEmail": "<opcional>" }` (la misma que configuraste como `ADMIN_PASSWORD`, la que usaste para generar `ADMIN_PASSWORD_BCRYPT`, o la del owner registrado en `shop_users`).  
+    - Respuesta OK: `{ "token": "<jwt>", "expiresInSec": 604800 }` (7 días). El JWT incluye el `shopId` del local identificado por `:slug`.  
+    - El cliente guarda `{ token, shopSlug }` en `sessionStorage` y envía `Authorization: Bearer <token>` en las rutas protegidas.
     - Límite de intentos por IP (rate limit) para reducir fuerza bruta.
+    - Si el local está `suspended`: **403** con `"este local está suspendido, contactá a soporte"`.
 
-- **Turnos**
-  - `GET /api/appointments?from=<ISO>&to=<ISO>&barberId=<uuid opcional>`  
-    - **Requiere** cabecera `Authorization: Bearer <jwt>`.  
+- **Turnos (admin, JWT)** — todos bajo `/api/shops/:slug/admin/...` para que el JWT se valide contra el local de la URL.
+  - `GET /api/shops/:slug/admin/appointments?from=<ISO>&to=<ISO>&barberId=<uuid opcional>`  
     - Lista turnos que intersectan el rango; `barberId` opcional para filtrar.
     - Cada fila incluye `service_name`, datos de cliente, `attended` (asistencia, `null`/`true`/`false`) y **no** expone nombre de barbero.
-  - `POST /api/appointments`  
-    - Crea un turno para el **barbero activo** (el cliente no envía `barberId`).
+  - `PATCH /api/shops/:slug/admin/appointments/:id/status`  
+    - Body: `{ "status": "confirmed" | "cancelled", "cancellationNote"?: "…" }`.  
+    - Si pasa a `cancelled` y el cliente tiene email configurado, se intenta enviar correo de cancelación (SMTP).
+  - `PATCH /api/shops/:slug/admin/appointments/:id/attendance`  
+    - Body: `{ "attended": true | false | null }` — marca si el cliente asistió.
+
+- **Turnos (público)**
+  - `POST /api/shops/:slug/appointments` (o `POST /api/appointments` para el local `DEFAULT_SHOP_SLUG`)  
+    - Crea un turno para el **barbero activo** del local.
     - Body: `serviceId`, `startsAt` (ISO), `customer` (`name`, `phone`, `email` obligatorio para notificaciones), `notes` opcional.
     - Valida reglas de agenda (anticipación, rango de días, horario, bloqueos, alineación de slot).
     - **503** si no hay barbero activo; **409** si el horario se solapa con otro turno.
-    - Límite de frecuencia por IP (rate limit).
     - Si hay **SMTP** configurado, envía correo de confirmación con enlace para cancelar (`/cancelar?token=…`).
   - `POST /api/appointments/cancel-by-token`  
     - Público (sin JWT). Body: `{ "token": "<jwt del enlace de cancelación>" }`. Cancela el turno si sigue `confirmed` y aún no comenzó. Límite por IP.
-  - `PATCH /api/appointments/:id/status`  
-    - **Requiere** `Authorization: Bearer <jwt>`.  
-    - Body: `{ "status": "confirmed" | "cancelled" }`.  
-    - Si pasa a `cancelled` y el cliente tiene email configurado, se intenta enviar correo de cancelación (SMTP).
-  - `PATCH /api/appointments/:id/attendance`  
-    - **Requiere** JWT. Body: `{ "attended": true | false | null }` — marca si el cliente asistió (solo tiene sentido operativo para turnos ya pasados; el panel lo habilita ahí).
 
-- **Configuración del negocio (admin, JWT)**
-  - `GET /api/admin/shop-settings` / `PUT /api/admin/shop-settings` — `bookingMinLeadHours`, `bookingMaxDaysAhead`, `shopName`, `contactWhatsapp`, `contactEmail`, `contactAddress` (opcionales; vacío borra el valor en BD).
-  - `GET /api/admin/business-hours` / `PUT /api/admin/business-hours` — arreglo de 7 días (`dayOfWeek` 0–6, `isClosed`, `openTime`/`closeTime` en `HH:MM` o `null` si cerrado).
-  - `GET /api/admin/services` — todos los servicios (incluye inactivos); `POST /api/admin/services` crear; `PATCH /api/admin/services/:id` actualizar (nombre, duración, precio, `active`).
-  - `GET /api/admin/blocked-ranges`; `POST /api/admin/blocked-ranges` (`startsAt`, `endsAt`, `note` opcional) — **409** si hay turnos activos en ese rango; `DELETE /api/admin/blocked-ranges/:id`.
+- **Configuración del negocio (admin, JWT)** — todas las rutas cuelgan de `/api/shops/:slug/admin/...` y validan que el JWT corresponda al local.
+  - `GET /api/shops/:slug/admin/shop-settings` / `PUT /api/shops/:slug/admin/shop-settings` — `bookingMinLeadHours`, `bookingMaxDaysAhead`, `shopName`, `contactWhatsapp`, `contactEmail`, `contactAddress` (opcionales; vacío borra el valor en BD).
+  - `GET /api/shops/:slug/admin/business-hours` / `PUT /api/shops/:slug/admin/business-hours` — arreglo de 7 días (`dayOfWeek` 0–6, `isClosed`, `openTime`/`closeTime` en `HH:MM` y `openTimeAfternoon`/`closeTimeAfternoon` opcionales para partir el día).
+  - `GET /api/shops/:slug/admin/services` — todos los servicios (incluye inactivos); `POST /api/shops/:slug/admin/services` crear; `PATCH /api/shops/:slug/admin/services/:id` actualizar (nombre, duración, precio, `active`, `isFavorite`); `DELETE /api/shops/:slug/admin/services/:id`.
+  - `GET /api/shops/:slug/admin/blocked-ranges`; `POST /api/shops/:slug/admin/blocked-ranges` (`startsAt`, `endsAt`, `note` opcional) — **409** si hay turnos activos en ese rango; `DELETE /api/shops/:slug/admin/blocked-ranges/:id`.
 
 ### Seeds / datos iniciales
 

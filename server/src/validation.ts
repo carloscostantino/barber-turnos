@@ -88,8 +88,6 @@ export const UpdateAppointmentAttendanceBody = z.object({
 
 export const AdminLoginBody = z.object({
   password: z.string().min(1),
-  /** Si no se envía, se usa `DEFAULT_SHOP_SLUG` del servidor. */
-  shopSlug: z.string().min(1).max(64).optional(),
   /** Si se envía, la contraseña se valida contra `shop_users` del local (dueño). */
   ownerEmail: z.string().email().optional(),
 });

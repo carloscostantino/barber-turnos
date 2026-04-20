@@ -6,8 +6,11 @@ import {
   useParams,
   useSearchParams,
 } from 'react-router-dom'
-import { clearAdminToken, getAdminToken } from '../adminToken'
-import { API_BASE, DEFAULT_SHOP_SLUG, shopPublicPath } from '../config'
+import {
+  clearAdminSession,
+  getAdminTokenForSlug,
+} from '../adminToken'
+import { DEFAULT_SHOP_SLUG, shopAdminPath, shopPublicPath } from '../config'
 import { whatsappHrefFromPhone } from '../lib/contact'
 import { formatBlockedRangeDisplay } from '../lib/blockedRangeDisplay'
 import {
@@ -23,7 +26,7 @@ import { isOnboardingDone, setOnboardingDone } from '../lib/onboardingStorage'
 
 /** Limpia sesión y recarga la app: evita estado React colgado si el JWT ya no sirve (401). */
 function reloadToLogin() {
-  clearAdminToken()
+  clearAdminSession()
   window.location.reload()
 }
 
@@ -31,7 +34,7 @@ function normalizeStoredToken(raw: string | null): string | null {
   if (!raw) return null
   const parts = raw.split('.')
   if (parts.length !== 3 || parts.some((p) => !p)) {
-    clearAdminToken()
+    clearAdminSession()
     return null
   }
   return raw
@@ -221,17 +224,29 @@ export default function AdminPanel() {
   const shopSlug = shopSlugParam ?? DEFAULT_SHOP_SLUG
 
   const [token, setToken] = useState<string | null>(() =>
-    normalizeStoredToken(getAdminToken()),
+    normalizeStoredToken(getAdminTokenForSlug(shopSlug)),
   )
 
+  /**
+   * Si el slug cambia (navegación entre locales) el token previo, aunque
+   * válido, pertenece a otra shop: lo descartamos aquí para obligar a hacer
+   * login contra la shop correcta. El servidor ya rechaza el cross-shop con
+   * 403, pero esto evita el 403 en la primera request y muestra el login
+   * directamente.
+   */
+  useEffect(() => {
+    const fresh = normalizeStoredToken(getAdminTokenForSlug(shopSlug))
+    setToken(fresh)
+  }, [shopSlug])
+
   const onSessionInvalid = useCallback(() => {
-    clearAdminToken()
+    clearAdminSession()
     setToken(null)
   }, [])
 
   const onLoggedIn = useCallback(() => {
-    setToken(normalizeStoredToken(getAdminToken()))
-  }, [])
+    setToken(normalizeStoredToken(getAdminTokenForSlug(shopSlug)))
+  }, [shopSlug])
 
   if (!token) {
     return <AdminLogin shopSlug={shopSlug} onLoggedIn={onLoggedIn} />
@@ -335,7 +350,7 @@ function AdminAuthenticatedPanel({
         const params = new URLSearchParams({ from, to })
         let res: Response
         try {
-          res = await fetch(`${API_BASE}/appointments?${params}`, {
+          res = await fetch(shopAdminPath(shopSlug, `appointments?${params}`), {
             headers: authHeader,
             signal,
           })
@@ -395,7 +410,7 @@ function AdminAuthenticatedPanel({
     try {
       setUpdatingId(id)
       setError(null)
-      const res = await fetch(`${API_BASE}/appointments/${id}/status`, {
+      const res = await fetch(shopAdminPath(shopSlug, `appointments/${id}/status`), {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -428,7 +443,7 @@ function AdminAuthenticatedPanel({
     try {
       setAttendanceUpdatingId(id)
       setError(null)
-      const res = await fetch(`${API_BASE}/appointments/${id}/attendance`, {
+      const res = await fetch(shopAdminPath(shopSlug, `appointments/${id}/attendance`), {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -469,7 +484,7 @@ function AdminAuthenticatedPanel({
       setUpdatingId(id)
       setError(null)
       const note = cancelNote.trim()
-      const res = await fetch(`${API_BASE}/appointments/${id}/status`, {
+      const res = await fetch(shopAdminPath(shopSlug, `appointments/${id}/status`), {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -957,13 +972,13 @@ function AdminAuthenticatedPanel({
         )}
 
         {tab === 'configuracion' && (
-          <ConfiguracionTab authHeader={authHeader} />
+          <ConfiguracionTab authHeader={authHeader} shopSlug={shopSlug} />
         )}
         {tab === 'horarios' && (
-          <HorariosTab authHeader={authHeader} />
+          <HorariosTab authHeader={authHeader} shopSlug={shopSlug} />
         )}
         {tab === 'servicios' && (
-          <ServiciosTab authHeader={authHeader} />
+          <ServiciosTab authHeader={authHeader} shopSlug={shopSlug} />
         )}
         {tab === 'bloqueos' && (
           <BloqueosTab authHeader={authHeader} shopSlug={shopSlug} />
@@ -1085,6 +1100,7 @@ function AdminOnboardingOverlay({
           {step === 0 && (
             <ConfiguracionTab
               authHeader={authHeader}
+              shopSlug={shopSlug}
               onDirtyChange={() => markDirty(0)}
               onSaved={() => clearDirty(0)}
             />
@@ -1092,6 +1108,7 @@ function AdminOnboardingOverlay({
           {step === 1 && (
             <HorariosTab
               authHeader={authHeader}
+              shopSlug={shopSlug}
               onDirtyChange={() => markDirty(1)}
               onSaved={() => clearDirty(1)}
             />
@@ -1099,6 +1116,7 @@ function AdminOnboardingOverlay({
           {step === 2 && (
             <ServiciosTab
               authHeader={authHeader}
+              shopSlug={shopSlug}
               onDirtyChange={() => markDirty(2)}
               onSaved={() => clearDirty(2)}
             />
@@ -1163,10 +1181,12 @@ function AdminOnboardingOverlay({
 
 function ConfiguracionTab({
   authHeader,
+  shopSlug,
   onDirtyChange,
   onSaved,
 }: {
   authHeader: Record<string, string>
+  shopSlug: string
   onDirtyChange?: () => void
   onSaved?: () => void
 }) {
@@ -1186,7 +1206,7 @@ function ConfiguracionTab({
     void (async () => {
       try {
         setLoading(true)
-        const res = await fetch(`${API_BASE}/admin/shop-settings`, {
+        const res = await fetch(shopAdminPath(shopSlug, 'shop-settings'), {
           headers: authHeader,
         })
         if (res.status === 401) {
@@ -1214,7 +1234,7 @@ function ConfiguracionTab({
         setLoading(false)
       }
     })()
-  }, [authHeader])
+  }, [authHeader, shopSlug])
 
   useEffect(() => {
     if (!msg) return
@@ -1227,7 +1247,7 @@ function ConfiguracionTab({
       setSaving(true)
       setErr(null)
       setMsg(null)
-      const res = await fetch(`${API_BASE}/admin/shop-settings`, {
+      const res = await fetch(shopAdminPath(shopSlug, 'shop-settings'), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', ...authHeader },
         body: JSON.stringify({
@@ -1455,10 +1475,12 @@ function enableSiestaForRow(r: BhRow): BhRow {
 
 function HorariosTab({
   authHeader,
+  shopSlug,
   onDirtyChange,
   onSaved,
 }: {
   authHeader: Record<string, string>
+  shopSlug: string
   onDirtyChange?: () => void
   onSaved?: () => void
 }) {
@@ -1472,7 +1494,7 @@ function HorariosTab({
   const touchDirty = () => onDirtyChange?.()
 
   const load = useCallback(async () => {
-    const res = await fetch(`${API_BASE}/admin/business-hours`, {
+    const res = await fetch(shopAdminPath(shopSlug, 'business-hours'), {
       headers: authHeader,
     })
     if (res.status === 401) {
@@ -1490,7 +1512,7 @@ function HorariosTab({
       }))
     setRows(normalized)
     setEditedDays(new Set())
-  }, [authHeader])
+  }, [authHeader, shopSlug])
 
   useEffect(() => {
     void (async () => {
@@ -1610,7 +1632,7 @@ function HorariosTab({
           closeTimeAfternoon: split.closeTimeAfternoon,
         }
       })
-      const res = await fetch(`${API_BASE}/admin/business-hours`, {
+      const res = await fetch(shopAdminPath(shopSlug, 'business-hours'), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', ...authHeader },
         body: JSON.stringify(body),
@@ -1813,10 +1835,12 @@ type ServiceRow = {
 
 function ServiciosTab({
   authHeader,
+  shopSlug,
   onDirtyChange,
   onSaved,
 }: {
   authHeader: Record<string, string>
+  shopSlug: string
   onDirtyChange?: () => void
   onSaved?: () => void
 }) {
@@ -1838,7 +1862,7 @@ function ServiciosTab({
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
-    const res = await fetch(`${API_BASE}/admin/services`, {
+    const res = await fetch(shopAdminPath(shopSlug, 'services'), {
       headers: authHeader,
     })
     if (res.status === 401) {
@@ -1847,7 +1871,7 @@ function ServiciosTab({
     }
     if (!res.ok) throw new Error('No se pudieron cargar los servicios')
     setRows((await res.json()) as ServiceRow[])
-  }, [authHeader])
+  }, [authHeader, shopSlug])
 
   useEffect(() => {
     void (async () => {
@@ -1866,7 +1890,7 @@ function ServiciosTab({
     try {
       touchDirty()
       setErr(null)
-      const res = await fetch(`${API_BASE}/admin/services/${id}`, {
+      const res = await fetch(shopAdminPath(shopSlug, `services/${id}`), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', ...authHeader },
         body: JSON.stringify({ active: !active }),
@@ -1888,7 +1912,7 @@ function ServiciosTab({
       touchDirty()
       setDeletingId(id)
       setErr(null)
-      const res = await fetch(`${API_BASE}/admin/services/${id}`, {
+      const res = await fetch(shopAdminPath(shopSlug, `services/${id}`), {
         method: 'DELETE',
         headers: authHeader,
       })
@@ -1924,7 +1948,7 @@ function ServiciosTab({
       touchDirty()
       setSavingFavoriteId(id)
       setErr(null)
-      const res = await fetch(`${API_BASE}/admin/services/${id}`, {
+      const res = await fetch(shopAdminPath(shopSlug, `services/${id}`), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', ...authHeader },
         body: JSON.stringify({ is_favorite: !isFavorite }),
@@ -1953,7 +1977,7 @@ function ServiciosTab({
       setSaving(true)
       setErr(null)
       const price_cents = Math.round(pesos * 100)
-      const res = await fetch(`${API_BASE}/admin/services`, {
+      const res = await fetch(shopAdminPath(shopSlug, 'services'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeader },
         body: JSON.stringify({
@@ -2004,7 +2028,7 @@ function ServiciosTab({
       setSavingEditId(id)
       setErr(null)
       const price_cents = Math.round(pesos * 100)
-      const res = await fetch(`${API_BASE}/admin/services/${id}`, {
+      const res = await fetch(shopAdminPath(shopSlug, `services/${id}`), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', ...authHeader },
         body: JSON.stringify({
@@ -2336,7 +2360,7 @@ function BloqueosTab({
   }
 
   const load = useCallback(async () => {
-    const res = await fetch(`${API_BASE}/admin/blocked-ranges`, {
+    const res = await fetch(shopAdminPath(shopSlug, 'blocked-ranges'), {
       headers: authHeader,
     })
     if (res.status === 401) {
@@ -2364,7 +2388,7 @@ function BloqueosTab({
     try {
       setDeletingId(id)
       setErr(null)
-      const res = await fetch(`${API_BASE}/admin/blocked-ranges/${id}`, {
+      const res = await fetch(shopAdminPath(shopSlug, `blocked-ranges/${id}`), {
         method: 'DELETE',
         headers: authHeader,
       })
@@ -2396,7 +2420,7 @@ function BloqueosTab({
     try {
       setSaving(true)
       setErr(null)
-      const res = await fetch(`${API_BASE}/admin/blocked-ranges`, {
+      const res = await fetch(shopAdminPath(shopSlug, 'blocked-ranges'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeader },
         body: JSON.stringify({
@@ -2442,7 +2466,7 @@ function BloqueosTab({
     try {
       setSaving(true)
       setErr(null)
-      const res = await fetch(`${API_BASE}/admin/blocked-ranges`, {
+      const res = await fetch(shopAdminPath(shopSlug, 'blocked-ranges'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeader },
         body: JSON.stringify({

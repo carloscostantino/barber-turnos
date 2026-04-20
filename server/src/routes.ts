@@ -165,12 +165,12 @@ router.get('/shops/:shopSlug/public-settings', async (req, res) => {
   await sendPublicSettings(paramStr(req.params.shopSlug), res);
 });
 
-router.post('/admin/login', loginRateLimiter, async (req, res) => {
+router.post('/shops/:shopSlug/admin/login', loginRateLimiter, async (req, res) => {
   const parsed = AdminLoginBody.safeParse(req.body);
   if (!parsed.success)
     return res.status(400).json({ error: formatZodError(parsed.error) });
 
-  const slug = parsed.data.shopSlug ?? env.DEFAULT_SHOP_SLUG;
+  const slug = paramStr(req.params.shopSlug);
   const shop = await getShopBySlug(slug);
   if (!shop) return res.status(404).json({ error: 'local no encontrado' });
   if (shop.status === 'suspended') {
@@ -215,7 +215,7 @@ router.post('/admin/login', loginRateLimiter, async (req, res) => {
   res.json({ token, expiresInSec: 7 * 24 * 60 * 60 });
 });
 
-router.get('/appointments', requireAdmin, async (req, res) => {
+router.get('/shops/:shopSlug/admin/appointments', requireAdmin, async (req, res) => {
   const parsed = ListAppointmentsQuery.safeParse(req.query);
   if (!parsed.success)
     return res.status(400).json({ error: formatZodError(parsed.error) });
@@ -229,7 +229,7 @@ router.get('/appointments', requireAdmin, async (req, res) => {
   res.json(rows);
 });
 
-router.patch('/appointments/:id/status', requireAdmin, async (req, res) => {
+router.patch('/shops/:shopSlug/admin/appointments/:id/status', requireAdmin, async (req, res) => {
   const idParsed = UUID.safeParse(paramStr(req.params.id));
   if (!idParsed.success) return res.status(400).json({ error: 'id inválido' });
 
@@ -282,7 +282,7 @@ router.patch('/appointments/:id/status', requireAdmin, async (req, res) => {
   res.json(row);
 });
 
-router.patch('/appointments/:id/attendance', requireAdmin, async (req, res) => {
+router.patch('/shops/:shopSlug/admin/appointments/:id/attendance', requireAdmin, async (req, res) => {
   const idParsed = UUID.safeParse(paramStr(req.params.id));
   if (!idParsed.success) return res.status(400).json({ error: 'id inválido' });
 
@@ -554,12 +554,12 @@ router.post(
   },
 );
 
-router.get('/admin/shop-settings', requireAdmin, async (req, res) => {
+router.get('/shops/:shopSlug/admin/shop-settings', requireAdmin, async (req, res) => {
   const s = await getShopSettings(req.shopId!);
   res.json(s);
 });
 
-router.put('/admin/shop-settings', requireAdmin, async (req, res) => {
+router.put('/shops/:shopSlug/admin/shop-settings', requireAdmin, async (req, res) => {
   const parsed = ShopSettingsBody.safeParse(req.body);
   if (!parsed.success)
     return res.status(400).json({ error: formatZodError(parsed.error) });
@@ -580,12 +580,12 @@ router.put('/admin/shop-settings', requireAdmin, async (req, res) => {
   res.json(s);
 });
 
-router.get('/admin/business-hours', requireAdmin, async (req, res) => {
+router.get('/shops/:shopSlug/admin/business-hours', requireAdmin, async (req, res) => {
   const rows = await listBusinessHours(req.shopId!);
   res.json(rows);
 });
 
-router.put('/admin/business-hours', requireAdmin, async (req, res) => {
+router.put('/shops/:shopSlug/admin/business-hours', requireAdmin, async (req, res) => {
   const parsed = BusinessHoursPutBody.safeParse(req.body);
   if (!parsed.success)
     return res.status(400).json({ error: formatZodError(parsed.error) });
@@ -645,12 +645,12 @@ router.put('/admin/business-hours', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
-router.get('/admin/services', requireAdmin, async (req, res) => {
+router.get('/shops/:shopSlug/admin/services', requireAdmin, async (req, res) => {
   const rows = await listServices(req.shopId!, false);
   res.json(rows);
 });
 
-router.post('/admin/services', requireAdmin, async (req, res) => {
+router.post('/shops/:shopSlug/admin/services', requireAdmin, async (req, res) => {
   const parsed = ServiceCreateBody.safeParse(req.body);
   if (!parsed.success)
     return res.status(400).json({ error: formatZodError(parsed.error) });
@@ -658,7 +658,7 @@ router.post('/admin/services', requireAdmin, async (req, res) => {
   res.status(201).json(row);
 });
 
-router.patch('/admin/services/:id', requireAdmin, async (req, res) => {
+router.patch('/shops/:shopSlug/admin/services/:id', requireAdmin, async (req, res) => {
   const idParsed = UUID.safeParse(paramStr(req.params.id));
   if (!idParsed.success) return res.status(400).json({ error: 'id inválido' });
   const parsed = ServiceUpdateBody.safeParse(req.body);
@@ -672,7 +672,7 @@ router.patch('/admin/services/:id', requireAdmin, async (req, res) => {
   res.json(row);
 });
 
-router.delete('/admin/services/:id', requireAdmin, async (req, res) => {
+router.delete('/shops/:shopSlug/admin/services/:id', requireAdmin, async (req, res) => {
   const idParsed = UUID.safeParse(paramStr(req.params.id));
   if (!idParsed.success) return res.status(400).json({ error: 'id inválido' });
   const result = await deleteServiceIfUnused(req.shopId!, idParsed.data);
@@ -686,12 +686,12 @@ router.delete('/admin/services/:id', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
-router.get('/admin/blocked-ranges', requireAdmin, async (req, res) => {
+router.get('/shops/:shopSlug/admin/blocked-ranges', requireAdmin, async (req, res) => {
   const rows = await listBlockedRanges(req.shopId!);
   res.json(rows);
 });
 
-router.post('/admin/blocked-ranges', requireAdmin, async (req, res) => {
+router.post('/shops/:shopSlug/admin/blocked-ranges', requireAdmin, async (req, res) => {
   const parsed = BlockedRangeCreateBody.safeParse(req.body);
   if (!parsed.success)
     return res.status(400).json({ error: formatZodError(parsed.error) });
@@ -743,7 +743,7 @@ router.post('/admin/blocked-ranges', requireAdmin, async (req, res) => {
   res.status(201).json(row);
 });
 
-router.delete('/admin/blocked-ranges/:id', requireAdmin, async (req, res) => {
+router.delete('/shops/:shopSlug/admin/blocked-ranges/:id', requireAdmin, async (req, res) => {
   const idParsed = UUID.safeParse(paramStr(req.params.id));
   if (!idParsed.success) return res.status(400).json({ error: 'id inválido' });
   const ok = await deleteBlockedRange(req.shopId!, idParsed.data);
