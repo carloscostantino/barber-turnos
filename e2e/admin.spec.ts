@@ -9,16 +9,19 @@ test.describe('Panel admin', () => {
   }) => {
     await page.goto('/s/default/admin');
 
+    // El h1 del login puede ser "Panel admin" (sin shopName) o "Hola, {nombre}"
+    // cuando el shop tiene nombre configurado. Usamos regex para no atarnos al seed.
+    const loginTitle = page.getByRole('heading', {
+      level: 1,
+      name: /^(Hola,\s.+|Panel admin)$/,
+    });
+
     if (await page.getByRole('button', { name: 'Cerrar sesión' }).isVisible()) {
       await page.getByRole('button', { name: 'Cerrar sesión' }).click();
-      await expect(
-        page.getByRole('heading', { name: 'Panel admin' }),
-      ).toBeVisible({ timeout: 10_000 });
+      await expect(loginTitle).toBeVisible({ timeout: 10_000 });
     }
 
-    await expect(
-      page.getByRole('heading', { name: 'Panel admin' }),
-    ).toBeVisible({ timeout: 15_000 });
+    await expect(loginTitle).toBeVisible({ timeout: 15_000 });
 
     const appointmentsWait = page.waitForResponse(
       (res) =>
@@ -35,8 +38,14 @@ test.describe('Panel admin', () => {
     const rows = (await res.json()) as unknown[];
     expect(Array.isArray(rows)).toBe(true);
 
+    // El h1 del panel autenticado sigue el mismo patrón que el login
+    // ("Hola, {nombre}" o "Panel admin" como fallback). El subtítulo
+    // ("Panel de administración · ...") se queda como <p>.
     await expect(
-      page.getByRole('heading', { name: 'Panel de administración' }),
+      page.getByRole('heading', {
+        level: 1,
+        name: /^(Hola,\s.+|Panel admin)$/,
+      }),
     ).toBeVisible({ timeout: 20_000 });
 
     await expect(

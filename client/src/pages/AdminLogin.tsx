@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { API_BASE, DEFAULT_SHOP_SLUG } from '../config'
+import { API_BASE, DEFAULT_SHOP_SLUG, shopPublicPath } from '../config'
 import { setAdminToken } from '../adminToken'
 
 type Props = {
@@ -12,6 +12,7 @@ export default function AdminLogin({ shopSlug, onLoggedIn }: Props) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [shopName, setShopName] = useState<string | null>(null)
 
   const isDemo = shopSlug === DEFAULT_SHOP_SLUG
 
@@ -19,6 +20,24 @@ export default function AdminLogin({ shopSlug, onLoggedIn }: Props) {
     setOwnerEmail('')
     setPassword('')
     setError(null)
+  }, [shopSlug])
+
+  useEffect(() => {
+    let cancelled = false
+    setShopName(null)
+    fetch(shopPublicPath(shopSlug, 'public-settings'))
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { shopName?: string | null } | null) => {
+        if (cancelled) return
+        const raw = d?.shopName?.trim()
+        setShopName(raw && raw.length > 0 ? raw : null)
+      })
+      .catch(() => {
+        /* cae al fallback "Panel admin" */
+      })
+    return () => {
+      cancelled = true
+    }
   }, [shopSlug])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -63,7 +82,7 @@ export default function AdminLogin({ shopSlug, onLoggedIn }: Props) {
     <div className="flex justify-center px-4">
       <div className="w-full max-w-md py-16">
         <h1 className="text-2xl font-semibold tracking-tight mb-6">
-          Panel admin
+          {shopName ? `Hola, ${shopName}` : 'Panel admin'}
         </h1>
         <div className="mb-6 space-y-2 text-slate-400 text-sm">
           {isDemo ? (

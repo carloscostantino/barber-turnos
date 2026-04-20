@@ -273,11 +273,31 @@ function AdminAuthenticatedPanel({
   const [attendanceUpdatingId, setAttendanceUpdatingId] = useState<
     string | null
   >(null)
+  const [shopName, setShopName] = useState<string | null>(null)
 
   const authHeader = useMemo(
     () => ({ Authorization: `Bearer ${token}` }),
     [token],
   )
+
+  /** Nombre del local para el encabezado ("Hola, {nombre}"); cae a "Panel admin" si no hay. */
+  useEffect(() => {
+    let cancelled = false
+    setShopName(null)
+    fetch(shopPublicPath(shopSlug, 'public-settings'))
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { shopName?: string | null } | null) => {
+        if (cancelled) return
+        const raw = d?.shopName?.trim()
+        setShopName(raw && raw.length > 0 ? raw : null)
+      })
+      .catch(() => {
+        /* cae al fallback */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [shopSlug])
 
   const navigate = useNavigate()
   const location = useLocation()
@@ -509,10 +529,11 @@ function AdminAuthenticatedPanel({
         <header className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h1 className="text-3xl font-semibold tracking-tight">
-              Panel de administración
+              {shopName ? `Hola, ${shopName}` : 'Panel admin'}
             </h1>
             <p className="text-slate-400 mt-1">
-              Turnos, configuración del local, horarios, servicios y bloqueos.
+              Panel de administración · turnos, configuración del local,
+              horarios, servicios y bloqueos.
             </p>
           </div>
           <button
