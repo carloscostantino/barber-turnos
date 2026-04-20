@@ -10,13 +10,37 @@ const JWT_ISS = 'barber-turnos-admin';
 export type AdminJwtPayload = {
   role: 'admin';
   shopId: string;
+  /**
+   * Modo reducido: el token fue emitido para una shop suspended (trial vencido
+   * o suscripción MP cancelada). Solo habilita endpoints de facturación.
+   */
+  restricted?: boolean;
 };
 
-export function signAdminToken(shopId: string): string {
-  return jwt.sign({ role: 'admin', shopId } satisfies AdminJwtPayload, env.JWT_SECRET, {
+export function signAdminToken(shopId: string, opts?: { restricted?: boolean }): string {
+  const payload: AdminJwtPayload = { role: 'admin', shopId };
+  if (opts?.restricted) payload.restricted = true;
+  return jwt.sign(payload, env.JWT_SECRET, {
     expiresIn: '7d',
     issuer: JWT_ISS,
   });
+}
+
+/**
+ * Rutas que un JWT `restricted: true` puede seguir consultando aunque la shop
+ * esté suspended. Se chequean como sufijo de `req.path` (ya sin `:shopSlug`).
+ */
+const RESTRICTED_ALLOWED_SUFFIXES = [
+  '/admin/trial-status',
+  '/admin/shop-settings',
+  '/admin/billing/subscribe',
+  '/admin/billing/cancel',
+  '/admin/billing/status',
+];
+
+function isAllowedForRestricted(path: string, method: string): boolean {
+  if (method === 'GET' && path.endsWith('/admin/shop-settings')) return true;
+  return RESTRICTED_ALLOWED_SUFFIXES.some((suffix) => path.endsWith(suffix));
 }
 
 /**
@@ -69,7 +93,19 @@ export const requireAdmin: RequestHandler = async (req: Request, res: Response, 
         .json({ error: 'este token no corresponde a este local' });
       return;
     }
-    (req as Request & { shopId: string }).shopId = shop.id;
+    if (payload.restricted && !isAllowedForRestricted(req.path, req.method)) {
+      res.status(403).json({
+        error:
+          'este local está suspendido, activá la suscripción para continuar',
+        restricted: true,
+      });
+      return;
+    }
+    (req as Request & { shopId: string; adminRestricted?: boolean }).shopId =
+      shop.id;
+    (req as Request & { adminRestricted?: boolean }).adminRestricted = Boolean(
+      payload.restricted,
+    );
     next();
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'error resolviendo local';

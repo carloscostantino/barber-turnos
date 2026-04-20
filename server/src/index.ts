@@ -5,7 +5,7 @@ import { pool } from './db';
 import { router } from './routes';
 import { startReminderScheduler } from './reminders';
 import { startTrialScheduler } from './trialJob';
-import { handleStripeWebhook } from './stripeWebhook';
+import { handleMpWebhook } from './mercadopagoWebhook';
 
 const app = express();
 
@@ -16,15 +16,15 @@ app.use(
     allowedHeaders: ['Content-Type', 'Authorization'],
   }),
 );
-/** Stripe requiere el body sin parsear JSON para verificar la firma. */
-app.post(
-  '/api/webhooks/stripe',
-  express.raw({ type: 'application/json' }),
-  (req, res) => {
-    void handleStripeWebhook(req, res);
-  },
-);
 app.use(express.json());
+
+/**
+ * Webhook de Mercado Pago. MP firma `id + request-id + ts` (no el body), así
+ * que no necesitamos raw body — usamos el mismo parser JSON global.
+ */
+app.post('/api/webhooks/mercadopago', (req, res) => {
+  void handleMpWebhook(req, res);
+});
 
 app.get('/health', async (_req, res) => {
   const result = await pool.query('select 1 as ok');

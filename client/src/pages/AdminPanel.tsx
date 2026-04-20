@@ -289,16 +289,35 @@ function AdminAuthenticatedPanel({
     string | null
   >(null)
   const [shopName, setShopName] = useState<string | null>(null)
-  const [trialStatus, setTrialStatus] = useState<{
+  type BillingInfo = {
+    configured: boolean
+    provider: 'none' | 'stripe' | 'mercadopago'
+    status: string
+    currentPeriodEnd: string | null
+    hasInitPoint: boolean
+    initPoint: string | null
+  }
+  type TrialStatus = {
     status: 'active' | 'trial' | 'suspended'
     trialEndsAt: string | null
     daysLeft: number | null
-  } | null>(null)
+    restricted?: boolean
+    billing?: BillingInfo
+  }
+  const [trialStatus, setTrialStatus] = useState<TrialStatus | null>(null)
+  const [billingError, setBillingError] = useState<string | null>(null)
+  const [billingLoading, setBillingLoading] = useState(false)
+  const [billingToast, setBillingToast] = useState<string | null>(null)
+  const [trialReloadNonce, setTrialReloadNonce] = useState(0)
 
   const authHeader = useMemo(
     () => ({ Authorization: `Bearer ${token}` }),
     [token],
   )
+
+  const navigate = useNavigate()
+  const location = useLocation()
+  const [searchParams] = useSearchParams()
 
   /** Nombre del local para el encabezado ("Hola, {nombre}"); cae a "Panel admin" si no hay. */
   useEffect(() => {
@@ -325,31 +344,59 @@ function AdminAuthenticatedPanel({
     setTrialStatus(null)
     fetch(shopAdminPath(shopSlug, 'trial-status'), { headers: authHeader })
       .then((r) => (r.ok ? r.json() : null))
-      .then(
-        (
-          d:
-            | {
-                status: 'active' | 'trial' | 'suspended'
-                trialEndsAt: string | null
-                daysLeft: number | null
-              }
-            | null,
-        ) => {
-          if (cancelled || !d) return
-          setTrialStatus(d)
-        },
-      )
+      .then((d: TrialStatus | null) => {
+        if (cancelled || !d) return
+        setTrialStatus(d)
+      })
       .catch(() => {
         /* silencioso: banner no es crítico */
       })
     return () => {
       cancelled = true
     }
+  }, [shopSlug, authHeader, trialReloadNonce])
+
+  /**
+   * Al volver desde Mercado Pago con ?billing=success, refrescar el estado y
+   * mostrar un toast; al completar la suscripción el webhook ya habrá
+   * actualizado shops.status.
+   */
+  useEffect(() => {
+    const billingFlag = searchParams.get('billing')
+    if (billingFlag === 'success') {
+      setBillingToast('Suscripción activada. Gracias por sumarte.')
+      setTrialReloadNonce((n) => n + 1)
+      const next = new URLSearchParams(searchParams)
+      next.delete('billing')
+      navigate(
+        { pathname: location.pathname, search: next.toString() },
+        { replace: true },
+      )
+    }
+  }, [searchParams, navigate, location.pathname])
+
+  const startBillingSubscribe = useCallback(async () => {
+    setBillingError(null)
+    setBillingLoading(true)
+    try {
+      const res = await fetch(shopAdminPath(shopSlug, 'billing/subscribe'), {
+        method: 'POST',
+        headers: { ...authHeader, 'Content-Type': 'application/json' },
+      })
+      const data = (await res.json().catch(() => null)) as {
+        initPoint?: string
+        error?: string
+      } | null
+      if (!res.ok || !data?.initPoint) {
+        throw new Error(data?.error ?? 'No se pudo iniciar la suscripción')
+      }
+      window.location.href = data.initPoint
+    } catch (e) {
+      setBillingError(e instanceof Error ? e.message : 'Error en facturación')
+      setBillingLoading(false)
+    }
   }, [shopSlug, authHeader])
 
-  const navigate = useNavigate()
-  const location = useLocation()
-  const [searchParams] = useSearchParams()
   const [tab, setTab] = useState<AdminTab>(() =>
     tabFromQueryParam(searchParams.get('tab')),
   )
@@ -595,6 +642,22 @@ function AdminAuthenticatedPanel({
           </button>
         </header>
 
+        {billingToast && (
+          <div
+            role="status"
+            className="mb-4 rounded-lg border border-emerald-700 bg-emerald-950/40 text-emerald-200 px-4 py-3 text-sm flex items-center justify-between"
+          >
+            <span>{billingToast}</span>
+            <button
+              type="button"
+              onClick={() => setBillingToast(null)}
+              className="text-xs text-emerald-300/70 hover:text-emerald-200"
+            >
+              Cerrar
+            </button>
+          </div>
+        )}
+
         {trialStatus?.status === 'trial' && trialStatus.daysLeft != null && (
           <div
             role="status"
@@ -615,18 +678,80 @@ function AdminAuthenticatedPanel({
               Cuando se venza, el local quedará suspendido y las reservas
               públicas se pausarán hasta activar una suscripción.
             </div>
+            {trialStatus.billing?.configured && (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void startBillingSubscribe()}
+                  disabled={billingLoading}
+                  className="text-sm px-3 py-1.5 rounded bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 disabled:text-slate-400 text-white transition-colors"
+                >
+                  {billingLoading ? 'Redirigiendo…' : 'Activar suscripción'}
+                </button>
+                {billingError && (
+                  <span className="text-xs text-red-300">{billingError}</span>
+                )}
+              </div>
+            )}
           </div>
         )}
 
-        <div className="flex flex-wrap gap-2 mb-6">
-          {tabBtn('turnos', 'Turnos')}
-          {tabBtn('configuracion', 'Configuración')}
-          {tabBtn('horarios', 'Horarios')}
-          {tabBtn('servicios', 'Servicios')}
-          {tabBtn('bloqueos', 'Bloqueos')}
-        </div>
+        {trialStatus?.status === 'suspended' && (
+          <div
+            role="alert"
+            className="mb-6 rounded-lg border border-red-700 bg-red-950/40 text-red-200 px-4 py-4 text-sm"
+          >
+            <div className="font-semibold">Este local está suspendido</div>
+            <div className="text-xs text-red-300/80 mt-0.5">
+              Las reservas públicas están pausadas. Activá una suscripción para
+              reanudar el servicio.
+            </div>
+            {trialStatus.billing?.configured ? (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void startBillingSubscribe()}
+                  disabled={billingLoading}
+                  className="text-sm px-3 py-1.5 rounded bg-violet-600 hover:bg-violet-500 disabled:bg-slate-700 disabled:text-slate-400 text-white transition-colors"
+                >
+                  {billingLoading ? 'Redirigiendo…' : 'Activar suscripción'}
+                </button>
+                {billingError && (
+                  <span className="text-xs text-red-300">{billingError}</span>
+                )}
+              </div>
+            ) : (
+              <div className="mt-2 text-xs text-red-300/80">
+                Contactá a soporte para reactivar el local.
+              </div>
+            )}
+          </div>
+        )}
 
-        {tab === 'turnos' && (
+        {!trialStatus?.restricted && (
+          <div className="flex flex-wrap gap-2 mb-6">
+            {tabBtn('turnos', 'Turnos')}
+            {tabBtn('configuracion', 'Configuración')}
+            {tabBtn('horarios', 'Horarios')}
+            {tabBtn('servicios', 'Servicios')}
+            {tabBtn('bloqueos', 'Bloqueos')}
+          </div>
+        )}
+
+        {trialStatus?.restricted && (
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-8 text-center text-slate-200">
+            <h2 className="text-xl font-semibold mb-2">
+              Acceso limitado a facturación
+            </h2>
+            <p className="text-sm text-slate-400 max-w-prose mx-auto">
+              Mientras el local esté suspendido solo podés administrar la
+              suscripción. Una vez confirmado el cobro se reactivan todas las
+              opciones del panel.
+            </p>
+          </div>
+        )}
+
+        {!trialStatus?.restricted && tab === 'turnos' && (
           <>
             <DashboardPanel authHeader={authHeader} shopSlug={shopSlug} />
             <div className="flex flex-wrap gap-2 items-center mb-4">
@@ -1028,16 +1153,16 @@ function AdminAuthenticatedPanel({
           </>
         )}
 
-        {tab === 'configuracion' && (
+        {!trialStatus?.restricted && tab === 'configuracion' && (
           <ConfiguracionTab authHeader={authHeader} shopSlug={shopSlug} />
         )}
-        {tab === 'horarios' && (
+        {!trialStatus?.restricted && tab === 'horarios' && (
           <HorariosTab authHeader={authHeader} shopSlug={shopSlug} />
         )}
-        {tab === 'servicios' && (
+        {!trialStatus?.restricted && tab === 'servicios' && (
           <ServiciosTab authHeader={authHeader} shopSlug={shopSlug} />
         )}
-        {tab === 'bloqueos' && (
+        {!trialStatus?.restricted && tab === 'bloqueos' && (
           <BloqueosTab authHeader={authHeader} shopSlug={shopSlug} />
         )}
       </div>

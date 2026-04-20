@@ -47,6 +47,21 @@ export default defineConfig({
         process.env.SYSTEM_ADMIN_PASSWORD ||
         process.env.E2E_SYSTEM_ADMIN_PASSWORD ||
         'e2e-system-admin-pass',
+      // Mercado Pago: para E2E usamos un access_token y secret cualquiera
+      // (nada se llama contra la API real porque MP_MOCK_PREAPPROVAL_STATUS
+      // hace que getPreapprovalStatus devuelva un payload simulado).
+      MP_ACCESS_TOKEN:
+        process.env.MP_ACCESS_TOKEN || 'e2e-mp-access-token',
+      MP_WEBHOOK_SECRET:
+        process.env.MP_WEBHOOK_SECRET || 'e2e-mp-webhook-secret',
+      MP_SUBSCRIPTION_AMOUNT_ARS:
+        process.env.MP_SUBSCRIPTION_AMOUNT_ARS || '4999',
+      MP_SUBSCRIPTION_REASON:
+        process.env.MP_SUBSCRIPTION_REASON || 'Suscripción E2E Barber Turnos',
+      // Marca "modo E2E": habilita el endpoint /system/e2e/mp-mock y hace que
+      // getPreapprovalStatus devuelva un objeto simulado.
+      MP_MOCK_PREAPPROVAL_STATUS:
+        process.env.MP_MOCK_PREAPPROVAL_STATUS || 'authorized',
     },
     reuseExistingServer: process.env.PW_TEST_REUSE_SERVER === '1',
     timeout: 180_000,

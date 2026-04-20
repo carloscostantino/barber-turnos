@@ -17,11 +17,33 @@ const EnvSchema = z
     TIMEZONE: z.string().min(1).default('America/Argentina/Buenos_Aires'),
     /** Slug del shop usado en rutas legacy sin `/shops/:slug` (migración multi-tenant). */
     DEFAULT_SHOP_SLUG: z.string().min(1).default('default'),
-    /** Secreto Stripe (webhook). Opcional hasta integrar cobros. */
-    STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
-    STRIPE_SECRET_KEY: z.string().min(1).optional(),
-    /** Price id de suscripción mensual en Stripe (ej. price_xxx). Opcional: sin esto no se genera Checkout al registrar. */
-    STRIPE_PRICE_ID: z.string().min(1).optional(),
+    /**
+     * Access token de Mercado Pago (sandbox o prod). Opcional: si no está
+     * definido, los endpoints de billing responden 501 pero el resto del sistema
+     * sigue funcionando (útil en desarrollo/CI local).
+     */
+    MP_ACCESS_TOKEN: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z.string().min(1).optional(),
+    ),
+    /** Secreto para validar la firma HMAC (`x-signature`) de los webhooks de MP. */
+    MP_WEBHOOK_SECRET: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z.string().min(1).optional(),
+    ),
+    /** Monto mensual a cobrar en ARS (entero, sin centavos, p. ej. 4999). */
+    MP_SUBSCRIPTION_AMOUNT_ARS: z.coerce.number().positive().default(4999),
+    /** Texto que MP muestra al cliente en el flujo de tarjeta. */
+    MP_SUBSCRIPTION_REASON: z.string().min(1).default('Suscripción Barber Turnos'),
+    /**
+     * Override solo para E2E: fuerza el estado que `getPreapprovalStatus`
+     * retornaría sin llamar a MP. Valores: authorized | paused | cancelled |
+     * pending. Si está vacío o no coincide, se hace la llamada real a MP.
+     */
+    MP_MOCK_PREAPPROVAL_STATUS: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z.enum(['authorized', 'paused', 'cancelled', 'pending']).optional(),
+    ),
     /** Secreto para firmar JWT del panel admin (mín. 16 caracteres). */
     JWT_SECRET: z.string().min(16),
     /**
@@ -138,5 +160,10 @@ export function isSmtpConfigured(): boolean {
 /** `true` si hay una contraseña configurada para el panel de sistema. */
 export function isSystemAdminConfigured(): boolean {
   return Boolean(env.SYSTEM_ADMIN_PASSWORD || env.SYSTEM_ADMIN_PASSWORD_BCRYPT);
+}
+
+/** `true` si Mercado Pago está configurado (access token + webhook secret). */
+export function isMpConfigured(): boolean {
+  return Boolean(env.MP_ACCESS_TOKEN && env.MP_WEBHOOK_SECRET);
 }
 

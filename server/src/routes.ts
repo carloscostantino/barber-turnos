@@ -20,7 +20,7 @@ import {
   updateService,
 } from './api';
 import { pool } from './db';
-import { env, isSmtpConfigured } from './env';
+import { env, isMpConfigured, isSmtpConfigured } from './env';
 import {
   createMailer,
   formatAppointmentDateTimeLabel,
@@ -79,8 +79,12 @@ import {
 } from './systemAdminAuth';
 import { registerShopAndOwner } from './shopOnboarding';
 import { getDashboardData } from './dashboard';
-import { stripeOnboardingAfterRegistration } from './stripeBilling';
 import { composeAddressLine } from './addressFormat';
+import {
+  cancelPreapprovalForShop,
+  createOrGetPreapprovalForShop,
+  getSubscriptionForShop,
+} from './mercadopagoBilling';
 
 /** Express 5 puede tipar `req.params` como `string | string[]`. */
 function paramStr(value: string | string[] | undefined): string {
@@ -174,11 +178,6 @@ router.post('/shops/:shopSlug/admin/login', loginRateLimiter, async (req, res) =
   const slug = paramStr(req.params.shopSlug);
   const shop = await getShopBySlug(slug);
   if (!shop) return res.status(404).json({ error: 'local no encontrado' });
-  if (shop.status === 'suspended') {
-    return res
-      .status(403)
-      .json({ error: 'este local está suspendido, contactá a soporte' });
-  }
 
   let ok = false;
   const emailTrim = parsed.data.ownerEmail?.trim();
@@ -212,8 +211,14 @@ router.post('/shops/:shopSlug/admin/login', loginRateLimiter, async (req, res) =
     return res.status(401).json({ error: 'credenciales incorrectas' });
   }
 
-  const token = signAdminToken(shop.id);
-  res.json({ token, expiresInSec: 7 * 24 * 60 * 60 });
+  const restricted = shop.status === 'suspended';
+  const token = signAdminToken(shop.id, { restricted });
+  res.json({
+    token,
+    expiresInSec: 7 * 24 * 60 * 60,
+    restricted,
+    shopStatus: shop.status,
+  });
 });
 
 router.get('/shops/:shopSlug/admin/appointments', requireAdmin, async (req, res) => {
@@ -584,12 +589,73 @@ router.get('/shops/:shopSlug/admin/trial-status', requireAdmin, async (req, res)
     const ms = new Date(shop.trialEndsAt).getTime() - Date.now();
     daysLeft = Math.max(0, Math.ceil(ms / (24 * 60 * 60 * 1000)));
   }
+  const sub = await getSubscriptionForShop(shop.id);
   res.json({
     status: shop.status,
     trialEndsAt: shop.trialEndsAt ?? null,
     daysLeft,
+    restricted: Boolean(req.adminRestricted),
+    billing: {
+      configured: isMpConfigured(),
+      provider: sub?.provider ?? 'none',
+      status: sub?.status ?? 'none',
+      currentPeriodEnd: sub?.currentPeriodEnd ?? null,
+      hasInitPoint: Boolean(sub?.initPoint),
+      initPoint: sub?.initPoint ?? null,
+    },
   });
 });
+
+router.post(
+  '/shops/:shopSlug/admin/billing/subscribe',
+  requireAdmin,
+  async (req, res) => {
+    if (!isMpConfigured()) {
+      return res.status(501).json({ error: 'Mercado Pago no configurado' });
+    }
+    try {
+      const out = await createOrGetPreapprovalForShop(req.shopId!);
+      if (!out) {
+        return res.status(500).json({ error: 'no se pudo crear preapproval' });
+      }
+      res.json({ initPoint: out.initPoint, preapprovalId: out.preapprovalId });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'error en Mercado Pago';
+      res.status(502).json({ error: msg });
+    }
+  },
+);
+
+router.post(
+  '/shops/:shopSlug/admin/billing/cancel',
+  requireAdmin,
+  async (req, res) => {
+    const ok = await cancelPreapprovalForShop(req.shopId!);
+    if (!ok) {
+      return res
+        .status(404)
+        .json({ error: 'sin suscripción activa para cancelar' });
+    }
+    res.json({ ok: true });
+  },
+);
+
+router.get(
+  '/shops/:shopSlug/admin/billing/status',
+  requireAdmin,
+  async (req, res) => {
+    const sub = await getSubscriptionForShop(req.shopId!);
+    res.json({
+      configured: isMpConfigured(),
+      provider: sub?.provider ?? 'none',
+      status: sub?.status ?? 'none',
+      currentPeriodEnd: sub?.currentPeriodEnd ?? null,
+      hasInitPoint: Boolean(sub?.initPoint),
+      initPoint: sub?.initPoint ?? null,
+      externalSubscriptionId: sub?.externalSubscriptionId ?? null,
+    });
+  },
+);
 
 router.put('/shops/:shopSlug/admin/shop-settings', requireAdmin, async (req, res) => {
   const parsed = ShopSettingsBody.safeParse(req.body);
@@ -825,6 +891,29 @@ router.patch('/system/shops/:id/status', requireSystemAdmin, async (req, res) =>
   res.json(row);
 });
 
+/**
+ * Test-only: permite a los E2E cambiar `MP_MOCK_PREAPPROVAL_STATUS` en caliente
+ * para ejercitar el webhook con distintos estados sin reiniciar el proceso.
+ *
+ * Solo se habilita si el server arrancó con algún valor inicial en
+ * `MP_MOCK_PREAPPROVAL_STATUS` (marca de "modo E2E") y requiere el JWT de
+ * super-admin. Si no está habilitado responde 404 para no filtrar información.
+ */
+router.post('/system/e2e/mp-mock', requireSystemAdmin, (req, res) => {
+  if (!env.MP_MOCK_PREAPPROVAL_STATUS) {
+    return res.status(404).json({ error: 'no disponible' });
+  }
+  const { status } = (req.body ?? {}) as { status?: string };
+  const allowed = ['authorized', 'paused', 'cancelled', 'pending'];
+  if (!status || !allowed.includes(status)) {
+    return res
+      .status(400)
+      .json({ error: 'status inválido', allowed });
+  }
+  process.env.MP_MOCK_PREAPPROVAL_STATUS = status;
+  res.json({ ok: true, status });
+});
+
 router.post('/shops/register', async (req, res) => {
   const parsed = RegisterShopBody.safeParse(req.body);
   if (!parsed.success)
@@ -837,16 +926,9 @@ router.post('/shops/register', async (req, res) => {
       ownerPassword: parsed.data.ownerPassword,
       timezone: parsed.data.timezone,
     });
-    const { checkoutUrl } = await stripeOnboardingAfterRegistration({
-      shopId: out.shopId,
-      slug: out.slug,
-      shopName: parsed.data.shopName,
-      ownerEmail: parsed.data.ownerEmail,
-    });
     res.status(201).json({
       shopId: out.shopId,
       slug: out.slug,
-      ...(checkoutUrl ? { checkoutUrl } : {}),
     });
   } catch (e: unknown) {
     const err = e as { code?: string };

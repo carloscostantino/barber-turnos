@@ -81,7 +81,7 @@ test.describe('Trial / suspensión', () => {
     }
   });
 
-  test('suspender una shop impide el login del admin', async () => {
+  test('suspender una shop permite login en modo restringido (sólo billing)', async () => {
     // Creamos una shop descartable.
     const suffix = Date.now().toString(36).slice(-6);
     const slug = `e2e-sus-${suffix}`;
@@ -119,12 +119,28 @@ test.describe('Trial / suspensión', () => {
     );
     expect(suspendRes.ok).toBeTruthy();
 
-    // Login admin ahora debe fallar con 403.
+    // Login admin sigue aceptando credenciales para que el owner pueda
+    // activar una suscripción, pero devuelve un token "restricted" que solo
+    // habilita los endpoints de facturación.
     const login = await fetch(`${API_BASE}/shops/${slug}/admin/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password }),
     });
-    expect(login.status).toBe(403);
+    expect(login.status).toBe(200);
+    const data = (await login.json()) as {
+      token: string;
+      restricted?: boolean;
+      shopStatus?: string;
+    };
+    expect(data.restricted).toBe(true);
+    expect(data.shopStatus).toBe('suspended');
+
+    // Endpoints no relacionados con billing quedan cerrados (403 restricted).
+    const apt = await fetch(
+      `${API_BASE}/shops/${slug}/admin/appointments?date=2030-01-01`,
+      { headers: { Authorization: `Bearer ${data.token}` } },
+    );
+    expect(apt.status).toBe(403);
   });
 });

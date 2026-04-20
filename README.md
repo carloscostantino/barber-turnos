@@ -30,7 +30,7 @@ Panel separado del admin de cada barbería. Sirve para ver todas las shops regis
 - **Habilitarlo fuera de Docker (`npm run dev`):** las mismas tres variables van en `server/.env` (mirá `server/.env.example`).
 - **Acceso:** `http://localhost:5173/system/login` → contraseña → tabla con barberías (nombre, slug, estado, dueño, suscripción, turnos del mes/total, alta) y link para abrir la reserva pública de cada una. Desde el dropdown de estado podés pasar una shop a `suspended` y vuelve a `active` / `trial` cuando quieras.
 - **Endpoints backend:** `POST /api/system/login`, `GET /api/system/shops`, `PATCH /api/system/shops/:id/status`. JWT aparte con `role: 'system_admin'` (issuer `barber-turnos-system`, válido 7 días); no se mezcla con el token admin por shop (keys de `sessionStorage` distintas). El login tiene rate limit dedicado (15 intentos / 15 min por IP).
-- **Efecto de `suspended`:** las rutas públicas por slug (`/api/shops/:slug/...`, `availability`, `POST /api/appointments`, `public-settings`) responden 404, y `POST /api/shops/:slug/admin/login` del local suspendido devuelve 403 con `"este local está suspendido, contactá a soporte"`.
+- **Efecto de `suspended`:** las rutas públicas por slug (`/api/shops/:slug/...`, `availability`, `POST /api/appointments`, `public-settings`) responden 404. El login admin del local **acepta credenciales** y devuelve un JWT con `restricted: true`; ese token sólo puede invocar los endpoints `/admin/billing/*`, `/admin/trial-status` y `GET /admin/shop-settings`. Cualquier otra ruta admin devuelve 403 con `{ restricted: true }`. Así el owner puede activar una suscripción sin pedirnos intervención manual.
 - **Aislamiento entre locales (multi-tenant):** todas las rutas del panel admin viven bajo `/api/shops/:slug/admin/...` y el middleware `requireAdmin` valida que el `shopId` del JWT coincida con el local identificado por el `slug` de la URL. Si un admin intenta usar un token emitido para la shop A contra `/shops/B/admin/...`, el servidor responde **403** con `"este token no corresponde a este local"`. El cliente guarda el `shopSlug` junto con el JWT en `sessionStorage` (`barber_turnos_admin_jwt` + `barber_turnos_admin_slug`) y, si detecta que la URL pide otro local, fuerza logout antes de hacer requests.
 
 ### Período de prueba (trial → suspended automático)
@@ -47,6 +47,36 @@ Cada shop registrada arranca en `status = 'trial'` con una fecha de fin (`trial_
 - **API admin:** `GET /api/shops/:slug/admin/trial-status` responde `{ status, trialEndsAt, daysLeft }`. El cliente lo consulta al entrar al panel y muestra un banner cuando el local está en `trial`; si `daysLeft ≤ 3` el banner pasa a color ámbar.
 - **Efecto de la expiración:** una shop `suspended` queda fuera de las rutas públicas (404) y el login admin del local devuelve 403 (`"este local está suspendido, contactá a soporte"`). Para reactivarla, cambiar el estado desde el [panel del sistema](#panel-del-sistema-super-admin).
 - **Backfill:** la migración `017_shop_trial_ends_at.js` agrega `trial_ends_at` y `trial_warning_sent_at` a `shops`; a las shops existentes en `trial` sin fecha les asigna `created_at + 14 días`.
+
+### Suscripciones con Mercado Pago
+
+El SaaS se cobra con **Mercado Pago preapproval_plan** en ARS: el owner asocia su tarjeta una vez y MP debita automáticamente todos los meses. Toda la integración es opcional: sin `MP_ACCESS_TOKEN` el endpoint `/admin/billing/subscribe` responde `501` y el webhook rechaza las notificaciones.
+
+- **Variables de entorno (`server/.env` / `docker-compose.yml`):**
+    - `MP_ACCESS_TOKEN` – Access token de la app de Mercado Pago (sandbox o prod).
+    - `MP_WEBHOOK_SECRET` – Clave para validar la cabecera `x-signature` (HMAC-SHA256 sobre `id:<data.id>;request-id:<x-request-id>;ts:<ts>;`).
+    - `MP_SUBSCRIPTION_AMOUNT_ARS` – Monto mensual en ARS (default `4999`).
+    - `MP_SUBSCRIPTION_REASON` – Texto que MP muestra al cliente (default `"Suscripción Barber Turnos"`).
+    - `MP_MOCK_PREAPPROVAL_STATUS` – **Solo E2E.** Valores: `authorized` · `paused` · `cancelled` · `pending`. Si está presente, `createOrGetPreapprovalForShop` y `getPreapprovalStatus` cortan sin llamar a la API real y devuelven un payload simulado. Habilita además el endpoint `POST /api/system/e2e/mp-mock` (requiere JWT de super-admin) para cambiarlo en caliente desde los tests.
+- **Endpoints admin (bajo `requireAdmin`, token `restricted` incluido):**
+    - `POST /api/shops/:slug/admin/billing/subscribe` – crea o reusa el `preapproval` de la shop y devuelve `{ initPoint }` para redirigir al flujo de tarjeta de MP. El `init_point` se guarda en `shop_subscriptions.init_point` para poder reutilizarlo.
+    - `POST /api/shops/:slug/admin/billing/cancel` – cancela el `preapproval` en MP (`PUT /preapproval/:id` con `status=cancelled`) y deja la DB en `status=canceled`. MP mandará un webhook de confirmación.
+    - `GET /api/shops/:slug/admin/billing/status` – devuelve `{ configured, provider, status, currentPeriodEnd, hasInitPoint, initPoint, externalSubscriptionId }`.
+    - `GET /api/shops/:slug/admin/trial-status` – suma `{ restricted, billing: { configured, provider, status, currentPeriodEnd, hasInitPoint, initPoint } }` para alimentar el banner del panel.
+- **Webhook (`POST /api/webhooks/mercadopago`):** valida `x-signature`, resuelve el `shop_id` por `external_subscription_id` o por `external_reference`, y dentro de una transacción actualiza `shop_subscriptions` + `shops.status`:
+    - `preapproval.authorized` → `shop_subscriptions.status = 'active'`, `shops.status = 'active'`, `current_period_end = next_payment_date`.
+    - `preapproval.paused` → `status = 'paused'` + `shops.status = 'suspended'`.
+    - `preapproval.cancelled` → `status = 'canceled'` + `shops.status = 'suspended'`.
+    - `preapproval.pending` → no toca `shops.status`; queda a la espera de que el owner complete el flujo.
+    - `authorized_payment` / `payment` → reutiliza el `preapproval` asociado (por `external_subscription_id`) y vuelve a aplicar el estado (útil para renovar `current_period_end`). La firma inválida devuelve 401; en errores transitorios internos el handler registra y responde 200 para evitar reintentos infinitos.
+- **Modo restringido del admin suspended:** cuando `shops.status = 'suspended'`, `POST /shops/:slug/admin/login` devuelve `{ token, restricted: true, shopStatus: 'suspended' }`. `requireAdmin` deja pasar ese token sólo hacia `/admin/billing/*`, `/admin/trial-status` y `GET /admin/shop-settings`. El `AdminPanel` detecta el flag y muestra un bloque central "Acceso limitado a facturación" ocultando las otras tabs (Configuración, Horarios, Servicios, Bloqueos), pero manteniendo el banner con el CTA **"Activar suscripción"**.
+- **Flujo completo:**
+    1. Owner entra a su panel en `trial` o `suspended` y hace click en "Activar suscripción".
+    2. El cliente llama a `POST /admin/billing/subscribe` y redirige a `initPoint`.
+    3. El owner ingresa su tarjeta en Mercado Pago.
+    4. MP manda `POST /api/webhooks/mercadopago` con `type = 'preapproval'` → el backend actualiza `shops.status = 'active'` y `shop_subscriptions.status = 'active'`.
+    5. MP redirige al owner a `…/s/:slug/admin?billing=success`: el panel detecta la query, refresca `trial-status` y muestra un toast "Suscripción activada".
+- **Migraciones:** `018_shop_subscriptions_init_point.js` agrega la columna `init_point` a `shop_subscriptions`. La columna `provider` ya incluía `mercadopago` desde la migración `011`.
 
 ### Dashboard del panel admin (tab Turnos)
 
@@ -368,11 +398,11 @@ Variable opcional: **`E2E_ADMIN_PASSWORD`** — si no está definida, los tests 
   - Disponibilidad y reservas alineadas con **horario de negocio** (con soporte opcional de segundo turno tarde), **bloqueos**, **anticipación mínima** y **máximo de días** adelante.
   - Un solo barbero efectivo por shop; validación de reservas en `scheduling.ts` + solapamiento en transacción.
   - Panel admin por shop: reglas, horarios (con opción "Dos turnos" y **"Aplicar a todos los días"** que respeta los días cerrados), CRUD de servicios y bloqueos, contacto del local (dirección de una sola línea), cancelación con email opcional.
-  - Login admin por shop: `ADMIN_PASSWORD` (dev) o `ADMIN_PASSWORD_BCRYPT` (producción); nunca ambas. Shops `suspended` devuelven 403 en login y 404 en rutas públicas.
+  - Login admin por shop: `ADMIN_PASSWORD` (dev) o `ADMIN_PASSWORD_BCRYPT` (producción); nunca ambas. Si el shop está `suspended` el login sigue aceptando credenciales pero emite un JWT **restringido** que sólo habilita los endpoints de billing; las rutas públicas siguen devolviendo 404.
   - **Panel del sistema** (`/system`) separado, con JWT propio y contraseña vía `SYSTEM_ADMIN_PASSWORD(_BCRYPT)`; permite listar barberías y cambiar su estado (`active` / `trial` / `suspended`).
   - **Demo reset** (`POST /api/demo/reset`): la home llama a este endpoint antes de entrar al demo para dejar el shop por defecto en su estado base (servicios, horarios, reglas, contacto, bloqueos, seed de barbero).
   - Recordatorios y cancelaciones por email según `TIMEZONE` (SMTP opcional).
-  - Stripe billing opcional (webhook + cliente) para suscripciones de shops (archivos `stripeBilling.ts`, `stripeWebhook.ts`).
+  - **Suscripciones con Mercado Pago** (`preapproval_plan`, ARS, mensual): endpoints admin `/admin/billing/subscribe|cancel|status`, webhook `/api/webhooks/mercadopago` con verificación HMAC (`x-signature`). Ver sección dedicada más abajo.
 
 - **Frontend**
   - **`/`** — Home con CTA "Ver demo de reservas" (resetea el shop demo antes de navegar) y "Registrar mi barbería".
