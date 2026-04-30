@@ -1,0 +1,11 @@
+# Contexto compose "web" usa la raíz del repo; evitar mandar node_modules y basura.
+node_modules
+**/node_modules
+.git
+.github
+e2e
+test-results
+playwright-report
+coverage
+.cursor
+*.log

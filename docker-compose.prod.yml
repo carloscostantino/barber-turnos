@@ -38,8 +38,8 @@ services:
 
   web:
     build:
-      context: ./client
-      dockerfile: Dockerfile.prod
+      context: .
+      dockerfile: client/Dockerfile.prod
       args:
         VITE_API_BASE: ${VITE_API_BASE:?Definí VITE_API_BASE en .env (p. ej. https://turnos.ejemplo.com/api)}
     restart: unless-stopped
