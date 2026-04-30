@@ -1,6 +1,6 @@
 import { es } from 'date-fns/locale'
 import { useCallback, useMemo } from 'react'
-import { DayPicker } from 'react-day-picker'
+import { DayPicker, getDefaultClassNames } from 'react-day-picker'
 import {
   parseYmdLocal,
   toYmdLocal,
@@ -25,6 +25,7 @@ export function BookingDateCalendar({
   maxDateStr,
   id,
 }: Props) {
+  const defaultClassNames = getDefaultClassNames()
   const eligibleSet = useMemo(() => new Set(eligibleDates), [eligibleDates])
 
   const isDisabled = useCallback(
@@ -65,6 +66,8 @@ export function BookingDateCalendar({
         mode="single"
         locale={es}
         weekStartsOn={1}
+        /** Botones a los lados del mes; sin esto en v9 el layout puede ocultar mal la flecha. */
+        navLayout="around"
         defaultMonth={defaultMonth}
         selected={selected}
         onSelect={(d) => {
@@ -76,17 +79,19 @@ export function BookingDateCalendar({
         fromDate={fromDate}
         toDate={toDate}
         classNames={{
-          root: 'booking-day-picker p-0',
-          months: 'flex flex-col gap-4',
-          month: 'space-y-2',
+          root: `${defaultClassNames.root} booking-day-picker p-0`,
+          months: `${defaultClassNames.months} flex flex-col gap-4`,
+          month: `${defaultClassNames.month} space-y-2`,
           month_caption:
-            'flex h-9 items-center justify-center relative px-9 pb-1',
-          caption_label: 'text-sm font-medium text-slate-200 capitalize',
-          nav: 'flex items-center gap-1',
+            'rdp-month_caption flex h-9 items-center justify-center relative px-9 pb-1',
+          caption_label:
+            'rdp-caption_label text-sm font-medium text-slate-200 capitalize',
+          nav: `${defaultClassNames.nav} flex items-center gap-1`,
+          chevron: `${defaultClassNames.chevron} size-4 fill-slate-200`,
           button_previous:
-            'absolute left-1 top-0 inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-600 bg-slate-800/90 text-slate-200 hover:bg-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-500 disabled:opacity-30',
+            'rdp-button_previous absolute left-1 top-0 inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-600 bg-slate-800/90 text-slate-200 hover:bg-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-500 disabled:opacity-30',
           button_next:
-            'absolute right-1 top-0 inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-600 bg-slate-800/90 text-slate-200 hover:bg-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-500 disabled:opacity-30',
+            'rdp-button_next absolute right-1 top-0 inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-600 bg-slate-800/90 text-slate-200 hover:bg-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-500 disabled:opacity-30',
           weekdays: 'flex',
           weekday:
             'w-9 text-center text-[0.7rem] font-medium uppercase tracking-wide text-slate-500',
