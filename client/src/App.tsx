@@ -37,12 +37,11 @@ function NavShopBrand() {
       .catch(() => {})
   }, [slug])
   return (
-    <span
-      className="text-slate-400 text-sm font-medium mr-2 truncate max-w-[12rem] sm:max-w-md"
-      title={label}
-    >
-      {label}
-    </span>
+    <NavLink to={`/s/${slug}`} end className={navClass} title={label}>
+      <span className="inline-block truncate max-w-[12rem] sm:max-w-md align-middle">
+        {label}
+      </span>
+    </NavLink>
   )
 }
 

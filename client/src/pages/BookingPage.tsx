@@ -51,6 +51,7 @@ type PublicSettings = {
   whatsappNumber?: string | null
   contactEmail?: string | null
   contactAddress?: string | null
+  contactAddressNotes?: string | null
   timezone?: string
   businessHours?: { dayOfWeek: number; isClosed: boolean }[]
   fullyBlockedDates?: string[]
@@ -91,6 +92,7 @@ const footerLinkClass =
 
 function BookingContactFooter({ settings }: { settings: PublicSettings }) {
   const addr = settings.contactAddress?.trim()
+  const addrNotes = settings.contactAddressNotes?.trim()
   const mapUrl = mapsSearchUrlFromAddress(addr ?? null)
   const waHref = whatsappHrefFromPhone(settings.whatsappNumber ?? null)
   const mail = settings.contactEmail?.trim()
@@ -126,6 +128,11 @@ function BookingContactFooter({ settings }: { settings: PublicSettings }) {
             <p className="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed">
               {addr}
             </p>
+            {addrNotes ? (
+              <p className="mt-2 text-xs text-slate-500 whitespace-pre-wrap leading-relaxed">
+                {addrNotes}
+              </p>
+            ) : null}
             {mapUrl ? (
               <a
                 href={mapUrl}

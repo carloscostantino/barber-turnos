@@ -1,0 +1,19 @@
+# Un solo nombre en el cert (PUBLIC_HOST). Subdominio sin www: este archivo.
+# Dominio raíz + www con redirección al apex: ver Caddyfile.apex y CADDY_DOCKERFILE en .env.
+# Caddy / Let's Encrypt necesitan que cada nombre del cert resuelva a esta VM.
+
+{$PUBLIC_HOST} {
+	encode gzip
+
+	handle /health {
+		reverse_proxy http://api:3001
+	}
+
+	handle /api* {
+		reverse_proxy http://api:3001
+	}
+
+	handle {
+		reverse_proxy http://web:80
+	}
+}

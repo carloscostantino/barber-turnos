@@ -15,6 +15,15 @@ export function formatDate(iso: string) {
   })
 }
 
+/** Importe en pesos ARS enteros (catálogo / suscripción), con símbolo $ */
+export function formatArsWhole(amount: number): string {
+  return new Intl.NumberFormat('es-AR', {
+    style: 'currency',
+    currency: 'ARS',
+    maximumFractionDigits: 0,
+  }).format(amount)
+}
+
 /** Pesos enteros, miles con punto (ej. $1.500). Sin decimales. */
 export function formatPesosArFromCents(price_cents: number): string {
   const whole = Math.round(price_cents / 100)

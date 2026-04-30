@@ -1,7 +1,71 @@
 import { pool } from './db';
 import { env, isMpConfigured } from './env';
 import { getPreApprovalClient } from './mercadopagoClient';
+import { getPlatformSettings } from './platformSettings';
 import { getShopById } from './shops';
+
+/**
+ * El SDK de MP lanza el JSON de error HTTP como objeto plano, no como Error.
+ * Sin esto el catch del route solo muestra el mensaje genérico.
+ */
+/**
+ * URL de retorno post-checkout en MP (`back_url`). MP a menudo rechaza
+ * `http://localhost:...`; usá `MP_REDIRECT_BASE_URL` con HTTPS (ngrok al puerto 5173).
+ */
+function buildMpBackUrl(shopSlug: string): string {
+  const base =
+    env.MP_REDIRECT_BASE_URL?.trim().replace(/\/$/, '') ??
+    env.CLIENT_ORIGIN.trim().replace(/\/$/, '');
+  const u = new URL(
+    `/s/${encodeURIComponent(shopSlug.trim())}/admin`,
+    base.endsWith('/') ? base.slice(0, -1) : base,
+  );
+  u.searchParams.set('billing', 'success');
+  return u.href;
+}
+
+/** MP rechaza localhost en `back_url`; fallamos antes con un mensaje accionable. */
+function assertMpBackUrlAcceptedByMercadoPago(backUrl: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(backUrl);
+  } catch {
+    throw new Error(
+      'La URL de retorno tras el pago no es válida. Revisá MP_REDIRECT_BASE_URL o CLIENT_ORIGIN en el servidor.',
+    );
+  }
+  const h = parsed.hostname.toLowerCase();
+  if (h === 'localhost' || h === '127.0.0.1' || h === '[::1]') {
+    throw new Error(
+      'Mercado Pago no acepta localhost en back_url. En el .env de la raíz del repo definí MP_REDIRECT_BASE_URL con la URL https pública del frontend (la misma con la que abrís el panel, p. ej. ngrok al puerto 5173), sin barra final. Reiniciá el contenedor o proceso del API.',
+    );
+  }
+}
+
+export function formatMpCaughtError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === 'object') {
+    const o = err as Record<string, unknown>;
+    if (typeof o.message === 'string' && o.message.trim()) return o.message;
+    if (Array.isArray(o.cause)) {
+      const parts: string[] = [];
+      for (const c of o.cause) {
+        if (c && typeof c === 'object') {
+          const cc = c as Record<string, unknown>;
+          if (typeof cc.description === 'string') parts.push(cc.description);
+          else if (typeof cc.code === 'string') parts.push(String(cc.code));
+        }
+      }
+      if (parts.length) return parts.join('; ');
+    }
+    try {
+      return JSON.stringify(o);
+    } catch {
+      /* ignore */
+    }
+  }
+  return 'Error al comunicar con Mercado Pago (revisá logs del servidor).';
+}
 
 export type SubscriptionRow = {
   shopId: string;
@@ -196,7 +260,7 @@ export async function createOrGetPreapprovalForShop(
   const isMockMode = Boolean(process.env.MP_MOCK_PREAPPROVAL_STATUS?.trim());
   if (isMockMode) {
     const preapprovalId = `MP-E2E-${shopId}`;
-    const initPoint = `${env.CLIENT_ORIGIN.replace(/\/$/, '')}/s/${shop.slug}/admin?billing=success`;
+    const initPoint = buildMpBackUrl(shop.slug);
     await upsertSubscription({
       shopId,
       provider: 'mercadopago',
@@ -214,18 +278,21 @@ export async function createOrGetPreapprovalForShop(
   const client = getPreApprovalClient();
   if (!client) return null;
 
-  const backUrl = `${env.CLIENT_ORIGIN.replace(/\/$/, '')}/s/${shop.slug}/admin?billing=success`;
+  const backUrl = buildMpBackUrl(shop.slug);
+  assertMpBackUrlAcceptedByMercadoPago(backUrl);
+
+  const platform = await getPlatformSettings();
 
   const resp = await client.create({
     body: {
-      reason: env.MP_SUBSCRIPTION_REASON,
+      reason: platform.current.subscriptionReason,
       external_reference: shopId,
       payer_email: ownerEmail,
       back_url: backUrl,
       auto_recurring: {
         frequency: 1,
         frequency_type: 'months',
-        transaction_amount: env.MP_SUBSCRIPTION_AMOUNT_ARS,
+        transaction_amount: platform.current.subscriptionPriceArs,
         currency_id: 'ARS',
       },
       status: 'pending',
@@ -346,4 +413,74 @@ export async function applyMpPreapprovalState(
   } finally {
     dbClient.release();
   }
+}
+
+const MP_UPDATE_THROTTLE_MS = 150;
+
+/**
+ * Llama a MP por cada suscripción activa para actualizar el `transaction_amount`
+ * al nuevo precio. Se ejecuta desde el `priceChangeJob` cuando un cambio
+ * programado se vuelve efectivo. MP aplica el nuevo monto al siguiente cobro.
+ *
+ * Incluye throttle para evitar rate limit cuando hay muchas shops. En modo mock
+ * (E2E) no llama a MP real pero igual devuelve los conteos para loggear.
+ */
+export async function applyPriceChangeToAllActiveShops(
+  newPriceArs: number,
+): Promise<{ updated: number; failed: number }> {
+  const r = await pool.query<{
+    shop_id: string;
+    external_subscription_id: string;
+  }>(
+    `select shop_id, external_subscription_id
+       from shop_subscriptions
+      where provider = 'mercadopago'
+        and external_subscription_id is not null
+        and status in ('active', 'trialing', 'paused')`,
+  );
+
+  const rows = r.rows;
+  const isMockMode = Boolean(process.env.MP_MOCK_PREAPPROVAL_STATUS?.trim());
+  if (isMockMode) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[mp] applyPriceChange mock: ${rows.length} shop(s) se habrían actualizado a ${newPriceArs} ARS`,
+    );
+    return { updated: rows.length, failed: 0 };
+  }
+
+  const client = getPreApprovalClient();
+  if (!client) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[mp] applyPriceChange: cliente MP no disponible; se omite sync',
+    );
+    return { updated: 0, failed: rows.length };
+  }
+
+  let updated = 0;
+  let failed = 0;
+  for (const row of rows) {
+    try {
+      await client.update({
+        id: row.external_subscription_id,
+        body: {
+          auto_recurring: {
+            transaction_amount: newPriceArs,
+            currency_id: 'ARS',
+          },
+        },
+      });
+      updated += 1;
+    } catch (err) {
+      failed += 1;
+      // eslint-disable-next-line no-console
+      console.error(
+        `[mp] applyPriceChange fallo shop=${row.shop_id} preapproval=${row.external_subscription_id}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, MP_UPDATE_THROTTLE_MS));
+  }
+  return { updated, failed };
 }

@@ -15,6 +15,7 @@ import { whatsappHrefFromPhone } from '../lib/contact'
 import { formatBlockedRangeDisplay } from '../lib/blockedRangeDisplay'
 import {
   dayRangeIso,
+  formatArsWhole,
   formatDate,
   formatPesosArFromCents,
   formatTime,
@@ -23,6 +24,7 @@ import {
 } from '../lib/format'
 import AdminLogin from './AdminLogin'
 import { isOnboardingDone, setOnboardingDone } from '../lib/onboardingStorage'
+import ConfirmDialog from '../components/ConfirmDialog'
 
 /** Limpia sesión y recarga la app: evita estado React colgado si el JWT ya no sirve (401). */
 function reloadToLogin() {
@@ -78,74 +80,6 @@ function tabFromQueryParam(raw: string | null): AdminTab {
 type TurnosViewMode = 'dia' | 'lista'
 
 const DAY_LABELS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
-
-/** Confirmación en pantalla (sin `window.confirm`). */
-function ConfirmDialog({
-  open,
-  title,
-  message,
-  confirmLabel = 'Continuar',
-  cancelLabel = 'Cancelar',
-  confirmDanger,
-  onConfirm,
-  onCancel,
-}: {
-  open: boolean
-  title: string
-  message: string
-  confirmLabel?: string
-  cancelLabel?: string
-  /** Estilo rojo para acciones destructivas. */
-  confirmDanger?: boolean
-  onConfirm: () => void
-  onCancel: () => void
-}) {
-  if (!open) return null
-  return (
-    <div
-      className="fixed inset-0 z-[200] flex items-center justify-center p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="confirm-dialog-title"
-    >
-      <button
-        type="button"
-        className="absolute inset-0 bg-black/55 backdrop-blur-[1px]"
-        aria-label="Cerrar"
-        onClick={onCancel}
-      />
-      <div className="relative z-10 w-full max-w-md rounded-xl border border-slate-600/80 bg-slate-900 p-5 shadow-2xl shadow-black/40">
-        <h3
-          id="confirm-dialog-title"
-          className="text-base font-semibold text-slate-100"
-        >
-          {title}
-        </h3>
-        <p className="mt-2 text-sm text-slate-400 leading-relaxed">{message}</p>
-        <div className="mt-5 flex flex-wrap justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="text-sm px-3 py-2 rounded-lg border border-slate-600 text-slate-300 hover:bg-slate-800"
-          >
-            {cancelLabel}
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            className={`text-sm px-3 py-2 rounded-lg font-medium ${
-              confirmDanger
-                ? 'bg-red-600 hover:bg-red-500 text-white'
-                : 'bg-violet-600 hover:bg-violet-500 text-white'
-            }`}
-          >
-            {confirmLabel}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
 
 function statusLabel(s: string) {
   if (s === 'confirmed') return 'Confirmado'
@@ -296,6 +230,10 @@ function AdminAuthenticatedPanel({
     currentPeriodEnd: string | null
     hasInitPoint: boolean
     initPoint: string | null
+    /** Precio mensual vigente (platform_settings). */
+    subscriptionPriceArs?: number
+    /** Texto que MP muestra al pagar. */
+    subscriptionReason?: string
   }
   type TrialStatus = {
     status: 'active' | 'trial' | 'suspended'
@@ -678,6 +616,21 @@ function AdminAuthenticatedPanel({
               Cuando se venza, el local quedará suspendido y las reservas
               públicas se pausarán hasta activar una suscripción.
             </div>
+            {trialStatus.billing?.configured &&
+              trialStatus.billing.subscriptionPriceArs != null && (
+                <p className="text-xs text-slate-300 mt-2">
+                  Suscripción mensual:{' '}
+                  <span className="font-semibold text-slate-200">
+                    {formatArsWhole(trialStatus.billing.subscriptionPriceArs)}
+                  </span>
+                  {trialStatus.billing.subscriptionReason?.trim() ? (
+                    <span className="text-slate-400 font-normal">
+                      {' '}
+                      ({trialStatus.billing.subscriptionReason.trim()})
+                    </span>
+                  ) : null}
+                </p>
+              )}
             {trialStatus.billing?.configured && (
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button
@@ -706,6 +659,21 @@ function AdminAuthenticatedPanel({
               Las reservas públicas están pausadas. Activá una suscripción para
               reanudar el servicio.
             </div>
+            {trialStatus.billing?.configured &&
+              trialStatus.billing.subscriptionPriceArs != null && (
+                <p className="text-xs text-red-200/90 mt-2">
+                  Suscripción mensual:{' '}
+                  <span className="font-semibold text-red-100">
+                    {formatArsWhole(trialStatus.billing.subscriptionPriceArs)}
+                  </span>
+                  {trialStatus.billing.subscriptionReason?.trim() ? (
+                    <span className="text-red-200/70 font-normal">
+                      {' '}
+                      ({trialStatus.billing.subscriptionReason.trim()})
+                    </span>
+                  ) : null}
+                </p>
+              )}
             {trialStatus.billing?.configured ? (
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button
@@ -748,6 +716,21 @@ function AdminAuthenticatedPanel({
               suscripción. Una vez confirmado el cobro se reactivan todas las
               opciones del panel.
             </p>
+            {trialStatus?.billing?.configured &&
+              trialStatus.billing.subscriptionPriceArs != null && (
+                <p className="text-sm text-slate-400 max-w-prose mx-auto mt-4">
+                  Suscripción mensual:{' '}
+                  <span className="text-slate-200 font-semibold">
+                    {formatArsWhole(trialStatus.billing.subscriptionPriceArs)}
+                  </span>
+                  {trialStatus.billing.subscriptionReason?.trim() ? (
+                    <span className="text-slate-500 font-normal">
+                      {' '}
+                      ({trialStatus.billing.subscriptionReason.trim()})
+                    </span>
+                  ) : null}
+                </p>
+              )}
           </div>
         )}
 
@@ -1378,7 +1361,13 @@ function ConfiguracionTab({
   const [maxD, setMaxD] = useState(15)
   const [contactWa, setContactWa] = useState('')
   const [contactEmail, setContactEmail] = useState('')
-  const [contactAddress, setContactAddress] = useState('')
+  const [addressStreet, setAddressStreet] = useState('')
+  const [addressNumber, setAddressNumber] = useState('')
+  const [addressFloor, setAddressFloor] = useState('')
+  const [addressCity, setAddressCity] = useState('')
+  const [addressRegion, setAddressRegion] = useState('')
+  const [addressPostalCode, setAddressPostalCode] = useState('')
+  const [addressNotes, setAddressNotes] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
@@ -1403,13 +1392,25 @@ function ConfiguracionTab({
           contactWhatsapp: string | null
           contactEmail: string | null
           contactAddress: string | null
+          addressStreet: string | null
+          addressNumber: string | null
+          addressFloor: string | null
+          addressCity: string | null
+          addressRegion: string | null
+          addressPostalCode: string | null
         }
         setShopName(d.shopName ?? '')
         setMinH(d.bookingMinLeadHours)
         setMaxD(d.bookingMaxDaysAhead)
         setContactWa(d.contactWhatsapp ?? '')
         setContactEmail(d.contactEmail ?? '')
-        setContactAddress(d.contactAddress ?? '')
+        setAddressStreet(d.addressStreet ?? '')
+        setAddressNumber(d.addressNumber ?? '')
+        setAddressFloor(d.addressFloor ?? '')
+        setAddressCity(d.addressCity ?? '')
+        setAddressRegion(d.addressRegion ?? '')
+        setAddressPostalCode(d.addressPostalCode ?? '')
+        setAddressNotes(d.contactAddress ?? '')
       } catch (e) {
         setErr(e instanceof Error ? e.message : 'Error')
       } finally {
@@ -1425,6 +1426,29 @@ function ConfiguracionTab({
   }, [msg])
 
   const save = async () => {
+    const street = addressStreet.trim()
+    const number = addressNumber.trim()
+    const floor = addressFloor.trim()
+    const city = addressCity.trim()
+    const region = addressRegion.trim()
+    const postalCode = addressPostalCode.trim()
+    const notes = addressNotes.trim()
+    const anyAddrSet = [
+      street,
+      number,
+      floor,
+      city,
+      region,
+      postalCode,
+      notes,
+    ].some((v) => v !== '')
+    if (anyAddrSet && (!street || !number || !city || !region)) {
+      setErr(
+        'Completá calle, número, localidad y provincia (o dejá todos los campos de dirección vacíos).',
+      )
+      setMsg(null)
+      return
+    }
     try {
       setSaving(true)
       setErr(null)
@@ -1438,13 +1462,13 @@ function ConfiguracionTab({
           shopName: shopName.trim() === '' ? null : shopName.trim(),
           contactWhatsapp: contactWa.trim() === '' ? null : contactWa,
           contactEmail: contactEmail.trim() === '' ? null : contactEmail,
-          addressStreet: null,
-          addressNumber: null,
-          addressFloor: null,
-          addressCity: null,
-          addressRegion: null,
-          addressPostalCode: null,
-          contactAddress: contactAddress.trim() === '' ? null : contactAddress,
+          addressStreet: street === '' ? null : street,
+          addressNumber: number === '' ? null : number,
+          addressFloor: floor === '' ? null : floor,
+          addressCity: city === '' ? null : city,
+          addressRegion: region === '' ? null : region,
+          addressPostalCode: postalCode === '' ? null : postalCode,
+          contactAddress: notes === '' ? null : notes,
         }),
       })
       if (res.status === 401) {
@@ -1495,22 +1519,139 @@ function ConfiguracionTab({
             placeholder="Ej: Barbería Central"
           />
         </div>
-        <div className="flex flex-col gap-1">
-          <label className="text-sm text-slate-300">Dirección</label>
-          <textarea
-            className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm min-h-[72px] resize-y"
-            value={contactAddress}
-            onChange={(e) => {
-              setContactAddress(e.target.value)
-              touchDirty()
-            }}
-            placeholder="Ej: Av. Corrientes 1234, CABA"
-            maxLength={500}
-            rows={3}
-          />
-          <p className="text-xs text-slate-500">
-            Aparece en la reserva pública con enlace al mapa.
-          </p>
+        <div className="flex flex-col gap-3 rounded-lg border border-slate-800 bg-slate-900/40 p-4">
+          <div>
+            <p className="text-sm text-slate-200 font-medium">Dirección</p>
+            <p className="text-xs text-slate-500 mt-1">
+              Completá calle, número, localidad y provincia para que Google Maps
+              encuentre la ubicación exacta. Piso/Dpto y código postal son
+              opcionales. Las referencias se muestran debajo de la dirección sin
+              afectar el mapa.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="flex flex-col gap-1 sm:col-span-2">
+              <label className="text-sm text-slate-300">
+                Calle <span className="text-slate-500">(obligatorio)</span>
+              </label>
+              <input
+                type="text"
+                className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
+                value={addressStreet}
+                onChange={(e) => {
+                  setAddressStreet(e.target.value)
+                  touchDirty()
+                }}
+                placeholder="Ej: Av. Corrientes"
+                maxLength={200}
+                autoComplete="address-line1"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-sm text-slate-300">
+                Número <span className="text-slate-500">(obligatorio)</span>
+              </label>
+              <input
+                type="text"
+                className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
+                value={addressNumber}
+                onChange={(e) => {
+                  setAddressNumber(e.target.value)
+                  touchDirty()
+                }}
+                placeholder="1234"
+                maxLength={200}
+                inputMode="numeric"
+              />
+            </div>
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-sm text-slate-300">Piso / Dpto</label>
+            <input
+              type="text"
+              className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
+              value={addressFloor}
+              onChange={(e) => {
+                setAddressFloor(e.target.value)
+                touchDirty()
+              }}
+              placeholder="Ej: 3A"
+              maxLength={200}
+              autoComplete="address-line2"
+            />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="flex flex-col gap-1 sm:col-span-2">
+              <label className="text-sm text-slate-300">
+                Localidad <span className="text-slate-500">(obligatorio)</span>
+              </label>
+              <input
+                type="text"
+                className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
+                value={addressCity}
+                onChange={(e) => {
+                  setAddressCity(e.target.value)
+                  touchDirty()
+                }}
+                placeholder="Ej: CABA"
+                maxLength={200}
+                autoComplete="address-level2"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-sm text-slate-300">
+                Provincia <span className="text-slate-500">(obligatorio)</span>
+              </label>
+              <input
+                type="text"
+                className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
+                value={addressRegion}
+                onChange={(e) => {
+                  setAddressRegion(e.target.value)
+                  touchDirty()
+                }}
+                placeholder="Ej: Buenos Aires"
+                maxLength={200}
+                autoComplete="address-level1"
+              />
+            </div>
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-sm text-slate-300">Código postal</label>
+            <input
+              type="text"
+              className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm"
+              value={addressPostalCode}
+              onChange={(e) => {
+                setAddressPostalCode(e.target.value)
+                touchDirty()
+              }}
+              placeholder="Ej: 1043"
+              maxLength={200}
+              autoComplete="postal-code"
+              inputMode="numeric"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-sm text-slate-300">
+              Referencias / Notas
+            </label>
+            <textarea
+              className="bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm min-h-[72px] resize-y"
+              value={addressNotes}
+              onChange={(e) => {
+                setAddressNotes(e.target.value)
+                touchDirty()
+              }}
+              placeholder="Ej: Entre Callao y Paraná. Timbre 3."
+              maxLength={500}
+              rows={3}
+            />
+            <p className="text-xs text-slate-500">
+              Se muestran debajo de la dirección pública pero no se incluyen en
+              el enlace al mapa.
+            </p>
+          </div>
         </div>
         <div className="flex flex-col gap-1">
           <label className="text-sm text-slate-300">WhatsApp</label>

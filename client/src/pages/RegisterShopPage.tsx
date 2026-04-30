@@ -200,7 +200,7 @@ export default function RegisterShopPage() {
         </div>
         <div>
           <label htmlFor="register-owner-email" className="text-sm text-slate-300">
-            Tu email (dueño)
+            Tu email (dueño) <span className="text-red-400">*</span>
           </label>
           <input
             id="register-owner-email"
@@ -209,7 +209,15 @@ export default function RegisterShopPage() {
             value={ownerEmail}
             onChange={(e) => setOwnerEmail(e.target.value)}
             required
+            aria-describedby="register-owner-email-help"
           />
+          <p
+            id="register-owner-email-help"
+            className="mt-1 text-xs text-slate-500"
+          >
+            Lo usamos para avisos importantes (fin del período de prueba,
+            cambios de precio, problemas con la suscripción). No lo compartimos.
+          </p>
         </div>
         <div>
           <label htmlFor="register-owner-password" className="text-sm text-slate-300">

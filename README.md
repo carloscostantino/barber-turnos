@@ -50,13 +50,16 @@ Cada shop registrada arranca en `status = 'trial'` con una fecha de fin (`trial_
 
 ### Suscripciones con Mercado Pago
 
+Guía paso a paso para credenciales de prueba, webhook con ngrok y variables en Docker: **[docs/mercadopago-guia-local.md](docs/mercadopago-guia-local.md)**. Plantilla de entorno en la raíz: **[.env.example](.env.example)** (copiar a `.env`).
+
 El SaaS se cobra con **Mercado Pago preapproval_plan** en ARS: el owner asocia su tarjeta una vez y MP debita automáticamente todos los meses. Toda la integración es opcional: sin `MP_ACCESS_TOKEN` el endpoint `/admin/billing/subscribe` responde `501` y el webhook rechaza las notificaciones.
 
 - **Variables de entorno (`server/.env` / `docker-compose.yml`):**
     - `MP_ACCESS_TOKEN` – Access token de la app de Mercado Pago (sandbox o prod).
     - `MP_WEBHOOK_SECRET` – Clave para validar la cabecera `x-signature` (HMAC-SHA256 sobre `id:<data.id>;request-id:<x-request-id>;ts:<ts>;`).
-    - `MP_SUBSCRIPTION_AMOUNT_ARS` – Monto mensual en ARS (default `4999`).
-    - `MP_SUBSCRIPTION_REASON` – Texto que MP muestra al cliente (default `"Suscripción Barber Turnos"`).
+    - `MP_SUBSCRIPTION_AMOUNT_ARS` – **Solo seed inicial** del precio mensual en ARS (default `4999`). Una vez que la migración `019` corre, la fuente de verdad es la tabla `platform_settings` y se edita desde el panel del super-admin.
+    - `MP_SUBSCRIPTION_REASON` – **Solo seed inicial** del texto que MP muestra al cliente (default `"Suscripción Barber Turnos"`).
+    - `PRICE_CHANGE_WINDOW_DAYS` – Días de anticipación con los que se programan los cambios de precio desde el panel del super-admin (default `30`; rango `0–365`). En dev conviene bajarlo a `0` o `1` para validar el flujo sin esperar.
     - `MP_MOCK_PREAPPROVAL_STATUS` – **Solo E2E.** Valores: `authorized` · `paused` · `cancelled` · `pending`. Si está presente, `createOrGetPreapprovalForShop` y `getPreapprovalStatus` cortan sin llamar a la API real y devuelven un payload simulado. Habilita además el endpoint `POST /api/system/e2e/mp-mock` (requiere JWT de super-admin) para cambiarlo en caliente desde los tests.
 - **Endpoints admin (bajo `requireAdmin`, token `restricted` incluido):**
     - `POST /api/shops/:slug/admin/billing/subscribe` – crea o reusa el `preapproval` de la shop y devuelve `{ initPoint }` para redirigir al flujo de tarjeta de MP. El `init_point` se guarda en `shop_subscriptions.init_point` para poder reutilizarlo.
@@ -76,7 +79,8 @@ El SaaS se cobra con **Mercado Pago preapproval_plan** en ARS: el owner asocia s
     3. El owner ingresa su tarjeta en Mercado Pago.
     4. MP manda `POST /api/webhooks/mercadopago` con `type = 'preapproval'` → el backend actualiza `shops.status = 'active'` y `shop_subscriptions.status = 'active'`.
     5. MP redirige al owner a `…/s/:slug/admin?billing=success`: el panel detecta la query, refresca `trial-status` y muestra un toast "Suscripción activada".
-- **Migraciones:** `018_shop_subscriptions_init_point.js` agrega la columna `init_point` a `shop_subscriptions`. La columna `provider` ya incluía `mercadopago` desde la migración `011`.
+- **Cambios de precio con preaviso:** el super-admin edita el precio desde el panel del sistema. El nuevo precio no se aplica al instante: se guarda en `platform_settings.pending_price_ars` + `pending_effective_at` (fecha calculada como `now() + PRICE_CHANGE_WINDOW_DAYS`) y se envía un email a todos los dueños con la fecha y el nuevo monto. Un job horario (`priceChangeJob`) promueve el pending cuando vence y llama a `PUT /preapproval/:id` por cada suscripción activa (throttle 150 ms) para que MP cobre el nuevo monto en el próximo ciclo de cada barbería. Solo se admite **un cambio pendiente a la vez**: si se intenta programar otro, el endpoint responde 409 y la UI ofrece cancelar el pendiente. La cancelación también dispara un aviso por email. En dev/E2E (`NODE_ENV != production` o `MP_MOCK_PREAPPROVAL_STATUS`) se expone `POST /api/system/platform-settings/run-job` para disparar el job al instante desde el super-admin.
+- **Migraciones:** `018_shop_subscriptions_init_point.js` agrega la columna `init_point` a `shop_subscriptions`. `019_platform_settings.js` crea el singleton `platform_settings` (precio vigente + cambio pendiente) y seed inicial. La columna `provider` ya incluía `mercadopago` desde la migración `011`.
 
 ### Dashboard del panel admin (tab Turnos)
 
@@ -120,6 +124,9 @@ Aplicación fullstack para gestionar turnos de una **barbería con un solo opera
   - `client/` – frontend React/Vite
   - `server/` – backend API
 - `docker-compose.yml` – Postgres, API, web y Mailpit (SMTP local para recordatorios)
+- `docker-compose.prod.yml` – producción: Postgres + API + front estático (nginx) + **Caddy** (TLS); ver [docs/deploy-oracle-free.md](docs/deploy-oracle-free.md)
+- `deploy/` – `Caddyfile` (un FQDN), `Caddyfile.apex` (dominio raíz + `www` con redirección al apex), `env.production.example` (plantilla de `.env` en la VM)
+- `client/Dockerfile.prod`, `client/nginx.prod.conf`, `client/.dockerignore` – build del SPA para producción detrás de Caddy
 - `playwright.config.ts`, carpeta `e2e/` – pruebas end-to-end
 - `server/`
   - `package.json`, `tsconfig.json`
@@ -182,13 +189,13 @@ En **Docker Compose**, `api` usa por defecto `ADMIN_PASSWORD=admin12345` para de
 
 #### `.env` en la raíz del repo (Docker Compose)
 
-Además del `server/.env` que usa el backend cuando corre fuera de Docker, hay un segundo archivo opcional `.env` en la **raíz del repo**. Docker Compose lo lee automáticamente para resolver las interpolaciones `${VAR:-}` del `docker-compose.yml`. Hoy se usa para las variables del **Panel del sistema**:
+Además del `server/.env` que usa el backend cuando corre fuera de Docker, hay un segundo archivo opcional `.env` en la **raíz del repo**. Docker Compose lo lee automáticamente para resolver las interpolaciones `${VAR:-}` del `docker-compose.yml`. Plantilla: [`.env.example`](.env.example) en la raíz (copiá a `.env` y completá valores).
 
-- `SYSTEM_ADMIN_PASSWORD` — contraseña del super-admin en texto plano (desarrollo), mínimo 8 caracteres. **XOR** con la siguiente.
-- `SYSTEM_ADMIN_PASSWORD_BCRYPT` — hash bcrypt para producción (generar con `cd server && npm run hash-admin-password -- "tu-clave"`).
-- `SYSTEM_ADMIN_EMAIL` — solo para mostrar en el panel (opcional).
+- **Panel del sistema:** `SYSTEM_ADMIN_PASSWORD` (texto plano, mín. 8 caracteres) **o** `SYSTEM_ADMIN_PASSWORD_BCRYPT` (producción). Opcional: `SYSTEM_ADMIN_EMAIL`.
+- **Mercado Pago (suscripción):** `MP_ACCESS_TOKEN` **y** `MP_WEBHOOK_SECRET`. Ambas son obligatorias para que `isMpConfigured()` sea verdadero: sin ellas el panel admin **no muestra** el botón "Activar suscripción" (aunque el token exista). Las credenciales salen del [panel de desarrolladores](https://www.mercadopago.com.ar/developers/panel/app) (sandbox o producción). Para probar el webhook desde internet hace falta una URL pública (p. ej. ngrok) apuntando a `POST /api/webhooks/mercadopago`.
+- **Cambio de precio:** opcional `PRICE_CHANGE_WINDOW_DAYS` (default 30 en compose); en dev podés poner `0` o `1` para acortar la ventana.
 
-Este archivo **no se commitea** (está en `.gitignore`). Si no existe o las variables están vacías, el panel del sistema queda deshabilitado (503 en `/api/system/*`).
+Este archivo **no se commitea** (está en `.gitignore`). Si no existe o las variables del super-admin están vacías, el panel del sistema queda deshabilitado (503 en `/api/system/*`).
 
 #### Recordatorios por email (opcional)
 
@@ -357,12 +364,29 @@ Si preferís un ciclo de desarrollo más rápido mientras editás código:
 
 ### Despliegue en producción (checklist)
 
-- **HTTPS** en el dominio del front y, si aplica, del API (reverse proxy o hosting gestionado).
-- **CORS:** `CLIENT_ORIGIN` en la API debe coincidir **exactamente** con la URL del navegador (esquema `https`, host y puerto si no es 443/80). Si el front y el API están en distintos orígenes, el cliente ya usa `VITE_API_BASE` apuntando al prefijo `/api` público.
-- **Build del frontend:** Vite inyecta variables en **tiempo de build**. Definí `VITE_API_BASE` (p. ej. `https://api.tudominio.com/api`) al ejecutar `npm run build` en `client/` o vía `docker build`/`ARG` según tu pipeline.
-- **Secretos:** `JWT_SECRET` largo y aleatorio; admin con `ADMIN_PASSWORD_BCRYPT` (no texto plano); `DATABASE_URL` apuntando a Postgres gestionado con TLS si el proveedor lo exige.
-- **WhatsApp:** podés cargar el número en **Panel → Reglas → Contacto del local** (persistido en BD); si no, definí `WHATSAPP_NUMBER` como respaldo (mismo formato: solo dígitos, código país).
-- **Recordatorios por email:** SMTP de producción y `MAIL_FROM`; ver límites del proveedor.
+#### Una sola VM (Oracle Cloud u otro VPS)
+
+La aplicación puede correr **entera en un solo servidor**: base de datos, API, SPA y TLS, sin hosting separado solo para la página de inicio.
+
+| Recurso | Ubicación / comando |
+|--------|----------------------|
+| Guía paso a paso | [docs/deploy-oracle-free.md](docs/deploy-oracle-free.md) |
+| Compose de prod | `docker compose -f docker-compose.prod.yml up -d --build` |
+| Variables | Copiar `deploy/env.production.example` a `.env` en la **raíz del repo en el servidor** (no se commitea). Incluye `PUBLIC_HOST`, `CLIENT_ORIGIN`, `VITE_API_BASE`, `CADDY_DOCKERFILE=Caddyfile.apex` cuando usás apex + `www`. |
+| TLS / routing | Caddy responde en 80/443; `/api` y `/health` al backend; el resto al estático de nginx. Certificados Let’s Encrypt automáticos. |
+| DNS | Registros **A** de `@` y `www` (misma IP pública de la VM) si usás `Caddyfile.apex`; proxy Cloudflare en **solo DNS** (nube gris) suele simplificar HTTP-01. |
+| Mercado Pago (prod) | Webhook: `https://<PUBLIC_HOST>/api/webhooks/mercadopago`; en MP completá `MP_ACCESS_TOKEN` y `MP_WEBHOOK_SECRET` en el `.env` del servidor. Guía local/ngrok: [docs/mercadopago-guia-local.md](docs/mercadopago-guia-local.md). |
+
+**Cursor / VS Code en el servidor:** extensión *Remote - SSH*; `Host` + `IdentityFile` en `~/.ssh/config` (Windows: `C:\Users\<usuario>\.ssh\config`). Abrí la carpeta `/home/ubuntu/barber-turnos`; el archivo `.env` está en la raíz del proyecto y puede no listarse en algunos diálogos: **Ctrl+P** → `.env`.
+
+#### Checklist general
+
+- **HTTPS** en el dominio del front y del prefijo `/api` (en el stack oficial lo resuelve Caddy).
+- **CORS:** `CLIENT_ORIGIN` debe coincidir **exactamente** con la URL del navegador (`https://`, host, puerto si no es 443/80). El cliente usa `VITE_API_BASE` apuntando a `.../api` en el mismo host.
+- **Build del frontend:** `VITE_API_BASE` se inyecta en **tiempo de build** (`docker-compose.prod.yml` pasa `ARG` al `Dockerfile.prod`).
+- **Secretos:** `JWT_SECRET` largo; `ADMIN_PASSWORD_BCRYPT` en prod (no `ADMIN_PASSWORD`); `POSTGRES_PASSWORD` alineado con `DATABASE_URL`.
+- **WhatsApp:** Panel → Reglas o `WHATSAPP_NUMBER` como respaldo.
+- **Recordatorios por email:** SMTP de producción y `MAIL_FROM` si configuras `SMTP_HOST`.
 
 ### Tests E2E (Playwright)
 
@@ -393,7 +417,7 @@ Variable opcional: **`E2E_ADMIN_PASSWORD`** — si no está definida, los tests 
 ### Estado actual del desarrollo
 
 - **Backend**
-  - Migraciones hasta `016_business_hours_afternoon.js` (multi-tenant `shops`, seed del demo, dirección por partes, unicidad de `phone` por shop, favoritos por shop, segundo turno en `business_hours`).
+  - Migraciones hasta `019_platform_settings.js` (singleton de precio de suscripción plataforma, cambios programados con preaviso; ver sección Mercado Pago). Históricas: multi-tenant `shops`, demo, `016_business_hours_afternoon.js` (segundo turno), etc.
   - Multi-tenant con columna `shop_id` en tablas editables; resolución por slug (`/s/:slug`) o `DEFAULT_SHOP_SLUG` para el demo.
   - Disponibilidad y reservas alineadas con **horario de negocio** (con soporte opcional de segundo turno tarde), **bloqueos**, **anticipación mínima** y **máximo de días** adelante.
   - Un solo barbero efectivo por shop; validación de reservas en `scheduling.ts` + solapamiento en transacción.
@@ -402,7 +426,7 @@ Variable opcional: **`E2E_ADMIN_PASSWORD`** — si no está definida, los tests 
   - **Panel del sistema** (`/system`) separado, con JWT propio y contraseña vía `SYSTEM_ADMIN_PASSWORD(_BCRYPT)`; permite listar barberías y cambiar su estado (`active` / `trial` / `suspended`).
   - **Demo reset** (`POST /api/demo/reset`): la home llama a este endpoint antes de entrar al demo para dejar el shop por defecto en su estado base (servicios, horarios, reglas, contacto, bloqueos, seed de barbero).
   - Recordatorios y cancelaciones por email según `TIMEZONE` (SMTP opcional).
-  - **Suscripciones con Mercado Pago** (`preapproval_plan`, ARS, mensual): endpoints admin `/admin/billing/subscribe|cancel|status`, webhook `/api/webhooks/mercadopago` con verificación HMAC (`x-signature`). Ver sección dedicada más abajo.
+  - **Suscripciones con Mercado Pago** (`preapproval_plan`, ARS, mensual): endpoints admin `/admin/billing/subscribe|cancel|status`, webhook `/api/webhooks/mercadopago` con verificación HMAC (`x-signature`). **Configuración de precio** en tabla `platform_settings` (panel super-admin); job `priceChangeJob` + avisos por email (`priceChangeNotifier`). Ver sección dedicada más arriba.
 
 - **Frontend**
   - **`/`** — Home con CTA "Ver demo de reservas" (resetea el shop demo antes de navegar) y "Registrar mi barbería".

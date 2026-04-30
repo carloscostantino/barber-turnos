@@ -54,6 +54,7 @@ import {
   CreateAppointmentBody,
   formatZodError,
   ListAppointmentsQuery,
+  PlatformPriceChangeBody,
   ServiceCreateBody,
   ServiceUpdateBody,
   ShopSettingsBody,
@@ -83,8 +84,21 @@ import { composeAddressLine } from './addressFormat';
 import {
   cancelPreapprovalForShop,
   createOrGetPreapprovalForShop,
+  formatMpCaughtError,
   getSubscriptionForShop,
 } from './mercadopagoBilling';
+import {
+  cancelPendingPriceChange,
+  getPlatformSettings,
+  NoChangeError,
+  PendingChangeExistsError,
+  schedulePriceChange,
+} from './platformSettings';
+import {
+  sendPriceChangeCancelledEmailToAllOwners,
+  sendPriceChangeEmailToAllOwners,
+} from './priceChangeNotifier';
+import { runPriceChangeJob } from './priceChangeJob';
 
 /** Express 5 puede tipar `req.params` como `string | string[]`. */
 function paramStr(value: string | string[] | undefined): string {
@@ -119,12 +133,24 @@ async function sendPublicSettings(slug: string, res: import('express').Response)
   const nameFromSettings = settings.shopName?.trim();
   const fallbackName = shop.name?.trim();
   const fromSlug = displayTitleFromSlug(shop.slug);
+  const hasStructuredAddress = [
+    settings.addressStreet,
+    settings.addressNumber,
+    settings.addressFloor,
+    settings.addressCity,
+    settings.addressRegion,
+    settings.addressPostalCode,
+  ].some((v) => typeof v === 'string' && v.trim() !== '');
+  const contactAddressNotes = hasStructuredAddress
+    ? settings.contactAddress?.trim() || null
+    : null;
   res.json({
     shopSlug: shop.slug,
     shopName: nameFromSettings || fallbackName || fromSlug || null,
     whatsappNumber: whatsappFromDb || env.WHATSAPP_NUMBER || null,
     contactEmail: settings.contactEmail,
     contactAddress: composeAddressLine(settings) ?? null,
+    contactAddressNotes,
     barberId,
     timezone: zone,
     bookingMinLeadHours: settings.bookingMinLeadHours,
@@ -580,6 +606,8 @@ router.get('/shops/:shopSlug/admin/dashboard', requireAdmin, async (req, res) =>
  *   - `status`: 'active' | 'trial' | 'suspended'
  *   - `trialEndsAt`: ISO | null (fecha en que vence la prueba, si aplica)
  *   - `daysLeft`: entero ≥ 0 o null (días enteros que faltan; 0 = expira hoy)
+ *   - `billing.subscriptionPriceArs` / `subscriptionReason`: precio mensual y
+ *     texto que verá el cliente en MP (desde `platform_settings`).
  */
 router.get('/shops/:shopSlug/admin/trial-status', requireAdmin, async (req, res) => {
   const shop = await getShopBySlug(paramStr(req.params.shopSlug));
@@ -590,6 +618,7 @@ router.get('/shops/:shopSlug/admin/trial-status', requireAdmin, async (req, res)
     daysLeft = Math.max(0, Math.ceil(ms / (24 * 60 * 60 * 1000)));
   }
   const sub = await getSubscriptionForShop(shop.id);
+  const platform = await getPlatformSettings();
   res.json({
     status: shop.status,
     trialEndsAt: shop.trialEndsAt ?? null,
@@ -602,6 +631,8 @@ router.get('/shops/:shopSlug/admin/trial-status', requireAdmin, async (req, res)
       currentPeriodEnd: sub?.currentPeriodEnd ?? null,
       hasInitPoint: Boolean(sub?.initPoint),
       initPoint: sub?.initPoint ?? null,
+      subscriptionPriceArs: platform.current.subscriptionPriceArs,
+      subscriptionReason: platform.current.subscriptionReason,
     },
   });
 });
@@ -620,7 +651,9 @@ router.post(
       }
       res.json({ initPoint: out.initPoint, preapprovalId: out.preapprovalId });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'error en Mercado Pago';
+      // eslint-disable-next-line no-console
+      console.error('[billing/subscribe] Mercado Pago:', e);
+      const msg = formatMpCaughtError(e);
       res.status(502).json({ error: msg });
     }
   },
@@ -890,6 +923,101 @@ router.patch('/system/shops/:id/status', requireSystemAdmin, async (req, res) =>
   if (!row) return res.status(404).json({ error: 'local no encontrado' });
   res.json(row);
 });
+
+/**
+ * Configuración global de la plataforma (precio mensual, texto del plan en MP
+ * y cambio pendiente programado). Solo el super-admin la consulta y modifica.
+ */
+router.get('/system/platform-settings', requireSystemAdmin, async (_req, res) => {
+  const settings = await getPlatformSettings();
+  res.json({ ...settings, windowDays: env.PRICE_CHANGE_WINDOW_DAYS });
+});
+
+/**
+ * Programa un cambio de precio con `env.PRICE_CHANGE_WINDOW_DAYS` días de
+ * anticipación. Si ya había un cambio pendiente responde 409 y la UI obliga a
+ * cancelarlo antes. El email a los owners se dispara en background.
+ */
+router.put(
+  '/system/platform-settings/price',
+  requireSystemAdmin,
+  async (req, res) => {
+    const parsed = PlatformPriceChangeBody.safeParse(req.body);
+    if (!parsed.success)
+      return res.status(400).json({ error: formatZodError(parsed.error) });
+    try {
+      const { settings, oldPriceArs } = await schedulePriceChange({
+        newPriceArs: parsed.data.subscriptionPriceArs,
+      });
+      if (settings.pending) {
+        void sendPriceChangeEmailToAllOwners({
+          oldPriceArs,
+          newPriceArs: settings.pending.priceArs,
+          effectiveAt: new Date(settings.pending.effectiveAt),
+        });
+      }
+      res.json({
+        ...settings,
+        windowDays: env.PRICE_CHANGE_WINDOW_DAYS,
+      });
+    } catch (err) {
+      if (err instanceof PendingChangeExistsError) {
+        return res.status(409).json({
+          error: 'ya hay un cambio de precio pendiente; cancelalo primero',
+          pending: err.pending,
+        });
+      }
+      if (err instanceof NoChangeError) {
+        return res
+          .status(400)
+          .json({ error: 'el precio nuevo coincide con el vigente' });
+      }
+      const msg = err instanceof Error ? err.message : 'error';
+      // eslint-disable-next-line no-console
+      console.error('[platform-settings] schedule error:', err);
+      res.status(500).json({ error: msg });
+    }
+  },
+);
+
+/**
+ * Cancela el cambio de precio pendiente (si lo hay). Si había pendiente, se
+ * avisa por email a los owners para cerrar el loop.
+ */
+router.delete(
+  '/system/platform-settings/pending',
+  requireSystemAdmin,
+  async (_req, res) => {
+    const { settings, cancelled } = await cancelPendingPriceChange();
+    if (cancelled) {
+      void sendPriceChangeCancelledEmailToAllOwners({
+        currentPriceArs: settings.current.subscriptionPriceArs,
+        cancelledPriceArs: cancelled.priceArs,
+        cancelledEffectiveAt: new Date(cancelled.effectiveAt),
+      });
+    }
+    res.json({ ...settings, windowDays: env.PRICE_CHANGE_WINDOW_DAYS });
+  },
+);
+
+/**
+ * Dev-only: ejecuta el `priceChangeJob` al instante para validar el flujo sin
+ * esperar el tick del scheduler. Disponible sólo en entornos no productivos o
+ * con `MP_MOCK_PREAPPROVAL_STATUS` definido (modo E2E).
+ */
+router.post(
+  '/system/platform-settings/run-job',
+  requireSystemAdmin,
+  async (_req, res) => {
+    const isDev = process.env.NODE_ENV !== 'production';
+    const isMock = Boolean(env.MP_MOCK_PREAPPROVAL_STATUS);
+    if (!isDev && !isMock) {
+      return res.status(404).json({ error: 'no disponible' });
+    }
+    await runPriceChangeJob();
+    res.json({ ok: true });
+  },
+);
 
 /**
  * Test-only: permite a los E2E cambiar `MP_MOCK_PREAPPROVAL_STATUS` en caliente

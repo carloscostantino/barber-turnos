@@ -32,3 +32,7 @@ coverage/
 /playwright-report/
 /blob-report/
 /playwright/.cache/
+
+# Claves SSH personales / instancia (no commitear)
+ssh-key-*.key
+ssh-key-*.key.pub

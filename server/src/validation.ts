@@ -102,6 +102,15 @@ export const ShopStatusUpdateBody = z.object({
   status: z.enum(['active', 'trial', 'suspended']),
 });
 
+/**
+ * Body del PUT que programa un cambio de precio mensual desde el super-admin.
+ * La fecha efectiva la calcula el backend (`now() + PRICE_CHANGE_WINDOW_DAYS`)
+ * y no viaja en el body.
+ */
+export const PlatformPriceChangeBody = z.object({
+  subscriptionPriceArs: z.number().int().positive().max(10_000_000),
+});
+
 const shopSlugPattern = /^[a-z0-9][a-z0-9-]{1,48}$/;
 
 export const RegisterShopBody = z.object({

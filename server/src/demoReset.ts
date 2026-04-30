@@ -13,8 +13,8 @@ const DEMO_SERVICES: Array<{
   price_cents: number;
   is_favorite: boolean;
 }> = [
-  { name: 'Corte', duration_minutes: 30, price_cents: 5000, is_favorite: true },
-  { name: 'Barba', duration_minutes: 20, price_cents: 3500, is_favorite: false },
+  { name: 'Corte', duration_minutes: 30, price_cents: 1000000, is_favorite: true },
+  { name: 'Barba', duration_minutes: 20, price_cents: 500000, is_favorite: false },
 ];
 
 /** Horario base: Lun–Sáb 09:00–19:00, Dom cerrado. */

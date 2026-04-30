@@ -59,10 +59,10 @@ export async function seedShopContent(
     );
 
     await client.query(
-      `insert into services (shop_id, name, duration_minutes, price_cents, active)
+      `insert into services (shop_id, name, duration_minutes, price_cents, active, is_favorite)
        values
-         ($1, 'Corte', 30, 5000, true),
-         ($1, 'Barba', 20, 3500, true)`,
+         ($1, 'Corte', 30, 1000000, true, true),
+         ($1, 'Barba', 20, 500000, true, false)`,
       [shopId],
     );
 

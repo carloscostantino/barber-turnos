@@ -7,4 +7,8 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   // Asegura modo SPA: /admin y otras rutas sirven index.html (útil en dev y preview).
   appType: 'spa',
+  server: {
+    // Vite rechaza por defecto Host distinto de localhost; ngrok envía el hostname público (403).
+    allowedHosts: true,
+  },
 })

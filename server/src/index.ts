@@ -5,13 +5,18 @@ import { pool } from './db';
 import { router } from './routes';
 import { startReminderScheduler } from './reminders';
 import { startTrialScheduler } from './trialJob';
+import { startPriceChangeScheduler } from './priceChangeJob';
 import { handleMpWebhook } from './mercadopagoWebhook';
 
 const app = express();
 
+if (env.TRUST_PROXY) {
+  app.set('trust proxy', 1);
+}
+
 app.use(
   cors({
-    origin: env.CLIENT_ORIGIN,
+    origin: env.corsAllowedOrigins,
     credentials: true,
     allowedHeaders: ['Content-Type', 'Authorization'],
   }),
@@ -38,5 +43,6 @@ app.listen(env.PORT, '0.0.0.0', () => {
   console.log(`API escuchando en http://0.0.0.0:${env.PORT}`);
   startReminderScheduler();
   startTrialScheduler();
+  startPriceChangeScheduler();
 });
 

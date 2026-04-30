@@ -9,11 +9,36 @@ const bcryptHash = z
   .min(1)
   .regex(/^\$2[aby]\$\d{2}\$.{53}$/, 'formato bcrypt inválido');
 
+function splitCommaList(raw: string | undefined): string[] {
+  if (!raw?.trim()) return [];
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
 const EnvSchema = z
   .object({
     DATABASE_URL: z.string().min(1),
     PORT: z.coerce.number().int().positive().default(3001),
+    /**
+     * Detrás de reverse proxy (Caddy, Nginx): `1` o `true` para que Express
+     * use X-Forwarded-For y el rate limiting vea la IP del cliente.
+     */
+    TRUST_PROXY: z.preprocess(
+      (v) => v === '1' || v === 'true' || v === true,
+      z.boolean().default(false),
+    ),
     CLIENT_ORIGIN: z.string().min(1).default('http://localhost:5173'),
+    /**
+     * Orígenes extra permitidos por CORS (coma-separados, sin espacios raros).
+     * Útil con ngrok: el navegador envía Origin `https://xxx.ngrok-free.dev`
+     * pero los enlaces del servidor siguen usando `CLIENT_ORIGIN` (localhost).
+     */
+    CORS_ALLOWED_ORIGINS: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z.string().optional(),
+    ),
     TIMEZONE: z.string().min(1).default('America/Argentina/Buenos_Aires'),
     /** Slug del shop usado en rutas legacy sin `/shops/:slug` (migración multi-tenant). */
     DEFAULT_SHOP_SLUG: z.string().min(1).default('default'),
@@ -44,6 +69,24 @@ const EnvSchema = z
       (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
       z.enum(['authorized', 'paused', 'cancelled', 'pending']).optional(),
     ),
+    /**
+     * Base pública del frontend (sin / final) solo para el `back_url` que MP
+     * exige al crear el preapproval. Si MP responde "Invalid value for back_url",
+     * exponé el Vite con ngrok (`ngrok http 5173`) y poné aquí la URL https,
+     * p. ej. `https://xxxx.ngrok-free.app`. Abrí el admin desde esa misma URL.
+     * Si no se define, se usa CLIENT_ORIGIN (localhost), que en sandbox a veces falla.
+     */
+    MP_REDIRECT_BASE_URL: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z.string().url().optional(),
+    ),
+    /**
+     * Días de anticipación con que se programa un cambio de precio de
+     * suscripción. El super-admin guarda el nuevo precio y el job aplica el
+     * cambio en MP cuando pasa esta ventana. En dev conviene bajar a 0 o 1
+     * para probar el flujo sin esperar.
+     */
+    PRICE_CHANGE_WINDOW_DAYS: z.coerce.number().int().min(0).max(365).default(30),
     /** Secreto para firmar JWT del panel admin (mín. 16 caracteres). */
     JWT_SECRET: z.string().min(16),
     /**
@@ -55,7 +98,10 @@ const EnvSchema = z
      * Hash bcrypt de la contraseña del admin (recomendado en producción).
      * Mutuamente excluyente con `ADMIN_PASSWORD`. Generar: `npm run hash-admin-password`.
      */
-    ADMIN_PASSWORD_BCRYPT: bcryptHash.optional(),
+    ADMIN_PASSWORD_BCRYPT: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      bcryptHash.optional(),
+    ),
     /**
      * Contraseña del panel de administración del sistema (super-admin, distinto
      * del admin por barbería). Solo para desarrollo local.
@@ -145,7 +191,14 @@ const EnvSchema = z
     }
   });
 
-export const env = EnvSchema.parse(process.env);
+const parsed = EnvSchema.parse(process.env);
+
+/** Incluye siempre `CLIENT_ORIGIN` más los valores de `CORS_ALLOWED_ORIGINS`. */
+const corsAllowedOrigins = [
+  ...new Set([parsed.CLIENT_ORIGIN, ...splitCommaList(parsed.CORS_ALLOWED_ORIGINS)]),
+];
+
+export const env = { ...parsed, corsAllowedOrigins };
 
 export function isSmtpConfigured(): boolean {
   return Boolean(
