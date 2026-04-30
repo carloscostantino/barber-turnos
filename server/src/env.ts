@@ -134,12 +134,24 @@ const EnvSchema = z
       .regex(/^\d{8,20}$/, 'usá solo dígitos, código país sin + ni espacios')
       .optional(),
     /** Si definís SMTP, usá también SMTP_USER, SMTP_PASS y MAIL_FROM (recordatorios por email). */
-    SMTP_HOST: z.string().min(1).optional(),
+    SMTP_HOST: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z.string().min(1).optional(),
+    ),
     SMTP_PORT: z.coerce.number().int().positive().default(587),
-    SMTP_USER: z.string().min(1).optional(),
-    SMTP_PASS: z.string().optional(),
+    SMTP_USER: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z.string().min(1).optional(),
+    ),
+    SMTP_PASS: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z.string().optional(),
+    ),
     /** Remitente (ej. "Barbería <info@dominio.com>" o solo el email). */
-    MAIL_FROM: z.string().min(1).optional(),
+    MAIL_FROM: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z.string().min(1).optional(),
+    ),
     /** Horas antes del turno para enviar el recordatorio (ventana ±45 min). */
     REMINDER_HOURS_BEFORE: z.coerce.number().positive().default(24),
     /** Cada cuántos minutos se evalúan candidatos a recordatorio. */
